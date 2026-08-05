@@ -10,6 +10,9 @@ const schema = z.object({
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),
   GOOGLE_REDIRECT_URI: z.string().url(),
+  CHATGPT_OAUTH_CLIENT_ID: z.string().min(16),
+  CHATGPT_OAUTH_CLIENT_SECRET: z.string().min(32),
+  CHATGPT_OAUTH_REDIRECT_URI: z.string().url(),
   TOKEN_STORE_PATH: z.string().default('/app/data/google-connections.enc'),
 });
 
