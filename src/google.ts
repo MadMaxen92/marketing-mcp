@@ -3,7 +3,11 @@ import type { Request, Response } from 'express';
 import { config } from './config.js';
 import { getConnection, readStore, upsertConnection, type GoogleConnection } from './token-store.js';
 
-const SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
+const SCOPE = [
+  'openid',
+  'email',
+  'https://www.googleapis.com/auth/analytics.readonly',
+].join(' ');
 const pendingStates = new Map<string, number>();
 
 type TokenResponse = {
