@@ -8,7 +8,7 @@ const AUTH_CODE_TTL_MS = 10 * 60_000;
 type PendingAuthorization = {
   clientId: string;
   redirectUri: string;
-  codeChallenge: string;
+  codeChallenge?: string;
   scope: string;
   resource?: string;
   expiresAt: number;
@@ -88,18 +88,18 @@ export function showAuthorizationPage(req: Request, res: Response): void {
   const redirectUri = String(req.query.redirect_uri ?? '');
   const responseType = String(req.query.response_type ?? '');
   const state = String(req.query.state ?? '');
-  const codeChallenge = String(req.query.code_challenge ?? '');
-  const codeChallengeMethod = String(req.query.code_challenge_method ?? '');
+  const codeChallenge = req.query.code_challenge ? String(req.query.code_challenge) : undefined;
+  const codeChallengeMethod = req.query.code_challenge_method ? String(req.query.code_challenge_method) : undefined;
   const scope = String(req.query.scope ?? SCOPE);
   const resource = req.query.resource ? String(req.query.resource) : undefined;
 
+  const pkceIsValid = !codeChallenge || codeChallengeMethod === 'S256';
   if (
     clientId !== config.CHATGPT_OAUTH_CLIENT_ID
     || !isAllowedRedirectUri(redirectUri)
     || responseType !== 'code'
     || !state
-    || !codeChallenge
-    || codeChallengeMethod !== 'S256'
+    || !pkceIsValid
   ) {
     res.status(400).send('Invalid OAuth authorization request.');
     return;
@@ -109,7 +109,7 @@ export function showAuthorizationPage(req: Request, res: Response): void {
     client_id: clientId,
     redirect_uri: redirectUri,
     state,
-    code_challenge: codeChallenge,
+    code_challenge: codeChallenge ?? '',
     scope,
     resource: resource ?? '',
   };
@@ -134,7 +134,7 @@ export function approveAuthorization(req: Request, res: Response): void {
   const clientId = String(req.body.client_id ?? '');
   const redirectUri = String(req.body.redirect_uri ?? '');
   const state = String(req.body.state ?? '');
-  const codeChallenge = String(req.body.code_challenge ?? '');
+  const codeChallenge = req.body.code_challenge ? String(req.body.code_challenge) : undefined;
   const scope = String(req.body.scope ?? SCOPE);
   const resource = req.body.resource ? String(req.body.resource) : undefined;
   const adminToken = String(req.body.admin_token ?? '');
@@ -144,7 +144,6 @@ export function approveAuthorization(req: Request, res: Response): void {
     || !isAllowedRedirectUri(redirectUri)
     || !secureEqual(adminToken, config.ADMIN_TOKEN)
     || !state
-    || !codeChallenge
   ) {
     res.status(401).send('Authorization denied.');
     return;
@@ -178,17 +177,19 @@ export function exchangeToken(req: Request, res: Response): void {
   if (grantType === 'authorization_code') {
     const code = String(req.body.code ?? '');
     const redirectUri = String(req.body.redirect_uri ?? '');
-    const codeVerifier = String(req.body.code_verifier ?? '');
+    const codeVerifier = req.body.code_verifier ? String(req.body.code_verifier) : undefined;
     const pending = pendingAuthorizations.get(code);
     pendingAuthorizations.delete(code);
+
+    const pkceIsValid = !pending?.codeChallenge
+      || (!!codeVerifier && sha256Base64Url(codeVerifier) === pending.codeChallenge);
 
     if (
       !pending
       || pending.expiresAt < Date.now()
       || pending.clientId !== clientId
       || pending.redirectUri !== redirectUri
-      || !codeVerifier
-      || sha256Base64Url(codeVerifier) !== pending.codeChallenge
+      || !pkceIsValid
     ) {
       res.status(400).json({ error: 'invalid_grant' });
       return;
