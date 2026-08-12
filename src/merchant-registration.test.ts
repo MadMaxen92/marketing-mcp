@@ -22,7 +22,11 @@ Object.assign(process.env, {
   CHATGPT_OAUTH_REDIRECT_URI: 'https://chatgpt.com/connector/oauth/test',
 });
 
-const { registerMerchantGcp } = await import('./merchant-center.js');
+const {
+  isMerchantGcpNotRegisteredError,
+  MerchantApiError,
+  registerMerchantGcp,
+} = await import('./merchant-center.js');
 const { upsertConnection } = await import('./token-store.js');
 
 after(async () => {
@@ -96,4 +100,15 @@ test('refuses registration when OAuth and developer identities differ', async (c
     }),
     /does not match developer email/,
   );
+});
+
+test('identifies only the temporary GCP registration propagation error', () => {
+  const propagationError = new MerchantApiError(401, {
+    error: {
+      details: [{ metadata: { REASON: 'GCP_NOT_REGISTERED' } }],
+    },
+  });
+  assert.equal(isMerchantGcpNotRegisteredError(propagationError), true);
+  assert.equal(isMerchantGcpNotRegisteredError(new MerchantApiError(403, {})), false);
+  assert.equal(isMerchantGcpNotRegisteredError(new Error('unrelated')), false);
 });

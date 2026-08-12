@@ -33,3 +33,5 @@ The command refuses to call the registration API unless the selected encrypted
 OAuth connection belongs to `max@flow.fast`. It registers the project, then calls
 the existing Merchant Center account overview as a verification step. It never
 prints OAuth or refresh tokens and creates no new OAuth client or service account.
+Because Google can take up to five minutes to propagate a new registration, only
+the specific `GCP_NOT_REGISTERED` response is retried during that verification.

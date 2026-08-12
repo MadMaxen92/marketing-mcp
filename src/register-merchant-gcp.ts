@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import {
   getMerchantAccountOverview,
+  isMerchantGcpNotRegisteredError,
   MerchantApiError,
   registerMerchantGcp,
 } from './merchant-center.js';
@@ -9,6 +10,30 @@ const GCP_PROJECT_ID = 'first-medium-504614-q0';
 const MERCHANT_ACCOUNT_ID = '5500122470';
 const DEVELOPER_EMAIL = 'max@flow.fast';
 const CONFIRMATION = `${GCP_PROJECT_ID}:${MERCHANT_ACCOUNT_ID}:${DEVELOPER_EMAIL}`;
+const OVERVIEW_RETRY_DELAY_MS = 15_000;
+const OVERVIEW_MAX_ATTEMPTS = 21;
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function verifyOverview(): Promise<any> {
+  for (let attempt = 1; attempt <= OVERVIEW_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await getMerchantAccountOverview({
+        connectionId: DEVELOPER_EMAIL,
+        accountId: MERCHANT_ACCOUNT_ID,
+      });
+    } catch (error) {
+      if (!isMerchantGcpNotRegisteredError(error) || attempt === OVERVIEW_MAX_ATTEMPTS) throw error;
+      console.error(
+        `Merchant registration is still propagating; overview retry ${attempt}/${OVERVIEW_MAX_ATTEMPTS - 1} in 15 seconds.`,
+      );
+      await delay(OVERVIEW_RETRY_DELAY_MS);
+    }
+  }
+  throw new Error('Merchant overview verification exhausted all attempts.');
+}
 
 function usage(): string {
   return [
@@ -59,10 +84,7 @@ async function main(): Promise<void> {
     };
   }
 
-  const overview = await getMerchantAccountOverview({
-    connectionId: DEVELOPER_EMAIL,
-    accountId: MERCHANT_ACCOUNT_ID,
-  });
+  const overview = await verifyOverview();
 
   console.log(JSON.stringify({
     targetGcpProjectId: GCP_PROJECT_ID,

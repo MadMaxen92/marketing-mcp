@@ -21,6 +21,14 @@ export class MerchantApiError extends Error {
   }
 }
 
+export function isMerchantGcpNotRegisteredError(error: unknown): boolean {
+  if (!(error instanceof MerchantApiError) || error.status !== 401) return false;
+  const body = error.responseBody as {
+    error?: { details?: Array<{ metadata?: { REASON?: string } }> };
+  };
+  return body.error?.details?.some((detail) => detail.metadata?.REASON === 'GCP_NOT_REGISTERED') ?? false;
+}
+
 export function normalizeMerchantAccountId(value: string): string {
   const normalized = value.replace(/^accounts\//, '');
   if (!/^\d+$/.test(normalized)) throw new Error('Merchant Center account ID must contain digits only.');
