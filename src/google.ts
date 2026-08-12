@@ -8,6 +8,7 @@ const SCOPE = [
   'email',
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/adwords',
+  'https://www.googleapis.com/auth/content',
 ].join(' ');
 const pendingStates = new Map<string, number>();
 
@@ -84,7 +85,7 @@ export async function finishGoogleOAuth(req: Request, res: Response): Promise<vo
     updatedAt: now,
   };
   await upsertConnection(connection);
-  res.type('html').send(`<h1>Google connected</h1><p>${profile.email}</p><p>Google Analytics and Google Ads access have been authorized. You can close this window.</p>`);
+  res.type('html').send(`<h1>Google connected</h1><p>${profile.email}</p><p>Google Analytics, Google Ads, and Google Merchant Center access have been authorized. You can close this window.</p>`);
 }
 
 export async function getAccessToken(connectionId?: string): Promise<{ token: string; connection: GoogleConnection }> {

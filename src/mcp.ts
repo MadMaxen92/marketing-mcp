@@ -8,6 +8,16 @@ import {
   listGoogleAdsAccounts,
   runGoogleAdsQuery,
 } from './google-ads.js';
+import {
+  getMerchantAccountOverview,
+  getMerchantPriceInsights,
+  getMerchantProductIssues,
+  getMerchantProductPerformance,
+  getMerchantProductStatus,
+  listMerchantCenterAccounts,
+  MERCHANT_PRODUCT_STATUSES,
+  runMerchantCenterQuery,
+} from './merchant-center.js';
 import { readStore } from './token-store.js';
 
 function result(value: unknown) {
@@ -17,7 +27,7 @@ function result(value: unknown) {
 }
 
 export function createMarketingMcpServer(): McpServer {
-  const server = new McpServer({ name: 'marketing-mcp', version: '0.2.0' });
+  const server = new McpServer({ name: 'marketing-mcp', version: '0.3.0' });
 
   server.tool(
     'list_google_connections',
@@ -139,6 +149,95 @@ export function createMarketingMcpServer(): McpServer {
       query: z.string().min(6).max(12000).describe('Read-only GAQL SELECT query.'),
     },
     async (input) => result(await runGoogleAdsQuery(input)),
+  );
+
+  server.tool(
+    'list_merchant_center_accounts',
+    'Lists Merchant Center accounts accessible to a connected Google account using Merchant API v1.',
+    {
+      connectionId: z.string().optional().describe('Connection ID or Google email. Defaults to the first connection.'),
+      pageSize: z.number().int().min(1).max(500).default(250),
+      pageToken: z.string().optional(),
+      filter: z.string().max(2000).optional().describe('Optional Merchant API account filter.'),
+    },
+    async (input) => result(await listMerchantCenterAccounts(input)),
+  );
+
+  server.tool(
+    'get_merchant_account_overview',
+    'Returns Merchant Center account details, account-level issues, and aggregate product-status statistics.',
+    {
+      connectionId: z.string().optional(),
+      accountId: z.string().regex(/^(accounts\/)?\d+$/).describe('Numeric Merchant Center account ID.'),
+    },
+    async (input) => result(await getMerchantAccountOverview(input)),
+  );
+
+  server.tool(
+    'get_merchant_product_status',
+    'Returns products with eligibility status, destination status, and item issues; supports optional filters.',
+    {
+      connectionId: z.string().optional(),
+      accountId: z.string().regex(/^(accounts\/)?\d+$/),
+      offerId: z.string().max(250).optional(),
+      status: z.enum(MERCHANT_PRODUCT_STATUSES).optional(),
+      reportingContext: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional().describe('For example SHOPPING_ADS or FREE_LISTINGS.'),
+      limit: z.number().int().min(1).max(1000).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await getMerchantProductStatus(input)),
+  );
+
+  server.tool(
+    'get_merchant_product_issues',
+    'Lists limited or disapproved Merchant Center products together with their item-level issues.',
+    {
+      connectionId: z.string().optional(),
+      accountId: z.string().regex(/^(accounts\/)?\d+$/),
+      reportingContext: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+      limit: z.number().int().min(1).max(1000).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await getMerchantProductIssues(input)),
+  );
+
+  server.tool(
+    'get_merchant_product_performance',
+    'Returns Merchant Center product impressions, clicks, conversions, and conversion value for a date range.',
+    {
+      connectionId: z.string().optional(),
+      accountId: z.string().regex(/^(accounts\/)?\d+$/),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      limit: z.number().int().min(1).max(1000).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await getMerchantProductPerformance(input)),
+  );
+
+  server.tool(
+    'get_merchant_price_insights',
+    'Returns available Merchant Center price recommendations and predicted performance changes.',
+    {
+      connectionId: z.string().optional(),
+      accountId: z.string().regex(/^(accounts\/)?\d+$/),
+      limit: z.number().int().min(1).max(1000).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await getMerchantPriceInsights(input)),
+  );
+
+  server.tool(
+    'run_merchant_center_query',
+    'Runs one read-only Merchant Center Query Language (MCQL) SELECT query for advanced reporting.',
+    {
+      connectionId: z.string().optional(),
+      accountId: z.string().regex(/^(accounts\/)?\d+$/),
+      query: z.string().min(6).max(12000),
+      pageSize: z.number().int().min(1).max(5000).default(1000),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await runMerchantCenterQuery(input)),
   );
 
   return server;
