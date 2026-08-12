@@ -11,6 +11,24 @@ export const MERCHANT_PRODUCT_STATUSES = [
 
 type MerchantProductStatus = (typeof MERCHANT_PRODUCT_STATUSES)[number];
 
+export class MerchantApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly responseBody: unknown,
+  ) {
+    super(`Merchant API error ${status}: ${JSON.stringify(responseBody)}`);
+    this.name = 'MerchantApiError';
+  }
+}
+
+export function isMerchantGcpNotRegisteredError(error: unknown): boolean {
+  if (!(error instanceof MerchantApiError) || error.status !== 401) return false;
+  const body = error.responseBody as {
+    error?: { details?: Array<{ metadata?: { REASON?: string } }> };
+  };
+  return body.error?.details?.some((detail) => detail.metadata?.REASON === 'GCP_NOT_REGISTERED') ?? false;
+}
+
 export function normalizeMerchantAccountId(value: string): string {
   const normalized = value.replace(/^accounts\//, '');
   if (!/^\d+$/.test(normalized)) throw new Error('Merchant Center account ID must contain digits only.');
@@ -29,11 +47,7 @@ function merchantUrl(path: string, query?: Record<string, string | number | unde
   return url.toString();
 }
 
-async function merchantJson(connectionId: string | undefined, path: string, init?: RequestInit): Promise<{
-  body: any;
-  connection: { id: string; email: string };
-}> {
-  const { token, connection } = await getAccessToken(connectionId);
+async function merchantRequest(token: string, path: string, init?: RequestInit): Promise<any> {
   const response = await fetch(merchantUrl(path), {
     ...init,
     headers: {
@@ -49,7 +63,16 @@ async function merchantJson(connectionId: string | undefined, path: string, init
   } catch {
     body = { raw: text };
   }
-  if (!response.ok) throw new Error(`Merchant API error ${response.status}: ${JSON.stringify(body)}`);
+  if (!response.ok) throw new MerchantApiError(response.status, body);
+  return body;
+}
+
+async function merchantJson(connectionId: string | undefined, path: string, init?: RequestInit): Promise<{
+  body: any;
+  connection: { id: string; email: string };
+}> {
+  const { token, connection } = await getAccessToken(connectionId);
+  const body = await merchantRequest(token, path, init);
   return { body, connection: { id: connection.id, email: connection.email } };
 }
 
@@ -131,6 +154,40 @@ export async function getMerchantAccountOverview(input: {
     accountIssuesNextPageToken: accountIssues.body.nextPageToken,
     aggregateProductStatuses: aggregateProductStatuses.body.aggregateProductStatuses ?? [],
     aggregateProductStatusesNextPageToken: aggregateProductStatuses.body.nextPageToken,
+  };
+}
+
+export async function registerMerchantGcp(input: {
+  connectionId: string;
+  accountId: string;
+  developerEmail: string;
+}): Promise<any> {
+  const accountId = normalizeMerchantAccountId(input.accountId);
+  const developerEmail = input.developerEmail.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(developerEmail)) {
+    throw new Error('Developer email must be a valid email address.');
+  }
+
+  const { token, connection } = await getAccessToken(input.connectionId);
+  if (connection.email.trim().toLowerCase() !== developerEmail) {
+    throw new Error(
+      `Refusing Merchant registration: OAuth connection ${connection.email} does not match developer email ${developerEmail}.`,
+    );
+  }
+
+  const developerRegistration = await merchantRequest(
+    token,
+    `/accounts/v1/accounts/${accountId}/developerRegistration:registerGcp`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ developerEmail }),
+    },
+  );
+
+  return {
+    connection: { id: connection.id, email: connection.email },
+    accountId,
+    developerRegistration,
   };
 }
 
