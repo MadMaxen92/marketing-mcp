@@ -14,19 +14,23 @@ function assertCustomerId(value: string): string {
   return normalized;
 }
 
+function isUserPermissionDenied(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('USER_PERMISSION_DENIED');
+}
+
 async function googleAdsJson(
   url: string,
   token: string,
   init?: RequestInit,
-  includeLoginCustomerId = true,
+  loginCustomerId?: string,
 ): Promise<any> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
     'developer-token': config.GOOGLE_ADS_DEVELOPER_TOKEN,
     'content-type': 'application/json',
   };
-  if (includeLoginCustomerId) {
-    headers['login-customer-id'] = config.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+  if (loginCustomerId) {
+    headers['login-customer-id'] = assertCustomerId(loginCustomerId);
   }
 
   const response = await fetch(url, {
@@ -44,16 +48,47 @@ async function googleAdsJson(
   return body;
 }
 
-async function searchStream(customerId: string, query: string, connectionId?: string): Promise<any[]> {
+async function searchStream(
+  customerId: string,
+  query: string,
+  connectionId?: string,
+  loginCustomerId: string | undefined = config.GOOGLE_ADS_LOGIN_CUSTOMER_ID,
+): Promise<any[]> {
   const customer = assertCustomerId(customerId);
   const { token } = await getAccessToken(connectionId);
   const body = await googleAdsJson(
     `${BASE_URL}/customers/${customer}/googleAds:searchStream`,
     token,
     { method: 'POST', body: JSON.stringify({ query }) },
+    loginCustomerId,
   );
   return Array.isArray(body) ? body.flatMap((batch) => batch.results ?? []) : [];
 }
+
+async function searchStreamWithDirectFallback(
+  customerId: string,
+  query: string,
+  connectionId?: string,
+): Promise<any[]> {
+  try {
+    return await searchStream(customerId, query, connectionId, config.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+  } catch (error) {
+    if (!isUserPermissionDenied(error)) throw error;
+    return searchStream(customerId, query, connectionId, undefined);
+  }
+}
+
+const CUSTOMER_CLIENT_QUERY = `SELECT
+  customer_client.id,
+  customer_client.descriptive_name,
+  customer_client.manager,
+  customer_client.level,
+  customer_client.status,
+  customer_client.currency_code,
+  customer_client.time_zone
+FROM customer_client
+WHERE customer_client.level <= 1
+ORDER BY customer_client.descriptive_name`;
 
 export async function listGoogleAdsAccounts(connectionId?: string): Promise<any> {
   const { token, connection } = await getAccessToken(connectionId);
@@ -61,36 +96,48 @@ export async function listGoogleAdsAccounts(connectionId?: string): Promise<any>
     `${BASE_URL}/customers:listAccessibleCustomers`,
     token,
     { method: 'GET' },
-    false,
   );
 
-  const managerId = config.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
-  let managedAccounts: any[] = [];
+  const managerId = assertCustomerId(config.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+  const directlyAccessibleCustomerIds = (accessible.resourceNames ?? [])
+    .map((name: string) => name.split('/').pop())
+    .filter((id: string | undefined): id is string => !!id && /^\d{10}$/.test(id));
+
+  const hierarchies: Array<{ seedCustomerId: string; rows?: any[]; warning?: string }> = [];
+
+  // Google's recommended hierarchy-discovery pattern is to start from each
+  // directly accessible customer without forcing a login-customer-id.
+  for (const seedCustomerId of directlyAccessibleCustomerIds) {
+    try {
+      const rows = await searchStream(seedCustomerId, CUSTOMER_CLIENT_QUERY, connectionId, undefined);
+      hierarchies.push({ seedCustomerId, rows });
+    } catch (error) {
+      hierarchies.push({
+        seedCustomerId,
+        warning: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // Also try the configured MCC explicitly. This is useful when the manager is
+  // not included in listAccessibleCustomers for the OAuth identity, while still
+  // preserving the diagnostic error instead of failing the whole tool.
+  let configuredManagerHierarchy: any[] | undefined;
+  let configuredManagerWarning: string | undefined;
   try {
-    managedAccounts = await searchStream(
-      managerId,
-      `SELECT
-        customer_client.id,
-        customer_client.descriptive_name,
-        customer_client.manager,
-        customer_client.level,
-        customer_client.status,
-        customer_client.currency_code,
-        customer_client.time_zone
-      FROM customer_client
-      WHERE customer_client.level <= 1
-      ORDER BY customer_client.descriptive_name`,
-      connectionId,
-    );
+    configuredManagerHierarchy = await searchStream(managerId, CUSTOMER_CLIENT_QUERY, connectionId, managerId);
   } catch (error) {
-    managedAccounts = [{ warning: error instanceof Error ? error.message : String(error) }];
+    configuredManagerWarning = error instanceof Error ? error.message : String(error);
   }
 
   return {
     connection: { id: connection.id, email: connection.email },
     loginCustomerId: managerId,
     directlyAccessibleCustomerResourceNames: accessible.resourceNames ?? [],
-    managedAccounts,
+    directlyAccessibleCustomerIds,
+    hierarchies,
+    configuredManagerHierarchy,
+    configuredManagerWarning,
   };
 }
 
@@ -101,7 +148,7 @@ export async function getGoogleAdsAccountOverview(input: {
   endDate: string;
 }): Promise<any> {
   const customerId = assertCustomerId(input.customerId);
-  const rows = await searchStream(
+  const rows = await searchStreamWithDirectFallback(
     customerId,
     `SELECT
       customer.id,
@@ -129,7 +176,7 @@ export async function getGoogleAdsCampaignPerformance(input: {
 }): Promise<any> {
   const customerId = assertCustomerId(input.customerId);
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
-  const rows = await searchStream(
+  const rows = await searchStreamWithDirectFallback(
     customerId,
     `SELECT
       campaign.id,
@@ -163,7 +210,7 @@ export async function getGoogleAdsSearchTerms(input: {
 }): Promise<any> {
   const customerId = assertCustomerId(input.customerId);
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
-  const rows = await searchStream(
+  const rows = await searchStreamWithDirectFallback(
     customerId,
     `SELECT
       search_term_view.search_term,
@@ -194,6 +241,6 @@ export async function runGoogleAdsQuery(input: {
   if (forbidden.test(input.query)) throw new Error('Only read-only GAQL SELECT queries are allowed.');
   if (!/^\s*SELECT\b/i.test(input.query)) throw new Error('GAQL query must start with SELECT.');
   const customerId = assertCustomerId(input.customerId);
-  const rows = await searchStream(customerId, input.query, input.connectionId);
+  const rows = await searchStreamWithDirectFallback(customerId, input.query, input.connectionId);
   return { customerId, rows };
 }
