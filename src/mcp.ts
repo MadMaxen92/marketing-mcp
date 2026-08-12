@@ -19,6 +19,7 @@ import {
   runMerchantCenterQuery,
 } from './merchant-center.js';
 import { readStore } from './token-store.js';
+import { getShopifySalesOverview, getShopifyShopOverview, listShopifyProducts } from './shopify.js';
 
 function result(value: unknown) {
   return {
@@ -238,6 +239,37 @@ export function createMarketingMcpServer(): McpServer {
       pageToken: z.string().optional(),
     },
     async (input) => result(await runMerchantCenterQuery(input)),
+  );
+
+  server.tool(
+    'get_shopify_shop_overview',
+    'Checks the read-only Shopify connection and returns non-sensitive shop details plus granted app scopes.',
+    {},
+    async () => result(await getShopifyShopOverview()),
+  );
+
+  server.tool(
+    'list_shopify_products',
+    'Lists Shopify products, variants, prices, statuses, and inventory without customer data.',
+    {
+      query: z.string().max(1000).optional().describe('Optional Shopify product search query.'),
+      limit: z.number().int().min(1).max(250).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await listShopifyProducts(input)),
+  );
+
+  server.tool(
+    'get_shopify_sales_overview',
+    'Returns Shopify order count, net current revenue, AOV, statuses, and daily totals without customer data.',
+    {
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      includeCancelled: z.boolean().default(false),
+      includeTest: z.boolean().default(false),
+      maxOrders: z.number().int().min(1).max(5000).default(1000),
+    },
+    async (input) => result(await getShopifySalesOverview(input)),
   );
 
   return server;
