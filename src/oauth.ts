@@ -2,7 +2,8 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { config } from './config.js';
 
-const SCOPE = 'mcp:read offline_access';
+const RESOURCE_SCOPE = 'mcp:read';
+const AUTHORIZATION_SCOPES = 'mcp:read offline_access';
 const AUTH_CODE_TTL_MS = 10 * 60_000;
 
 type PendingAuthorization = {
@@ -62,15 +63,17 @@ function htmlEscape(value: string): string {
 }
 
 export function protectedResourceMetadata(_req: Request, res: Response): void {
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     resource: `${config.PUBLIC_BASE_URL}/mcp`,
     authorization_servers: [config.PUBLIC_BASE_URL],
-    scopes_supported: ['mcp:read', 'offline_access'],
+    scopes_supported: [RESOURCE_SCOPE],
     bearer_methods_supported: ['header'],
   });
 }
 
 export function authorizationServerMetadata(_req: Request, res: Response): void {
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     issuer: config.PUBLIC_BASE_URL,
     authorization_endpoint: `${config.PUBLIC_BASE_URL}/oauth/authorize`,
@@ -90,7 +93,7 @@ export function showAuthorizationPage(req: Request, res: Response): void {
   const state = String(req.query.state ?? '');
   const codeChallenge = req.query.code_challenge ? String(req.query.code_challenge) : undefined;
   const codeChallengeMethod = req.query.code_challenge_method ? String(req.query.code_challenge_method) : undefined;
-  const scope = String(req.query.scope ?? SCOPE);
+  const scope = String(req.query.scope ?? AUTHORIZATION_SCOPES);
   const resource = req.query.resource ? String(req.query.resource) : undefined;
 
   const pkceIsValid = !codeChallenge || codeChallengeMethod === 'S256';
@@ -135,7 +138,7 @@ export function approveAuthorization(req: Request, res: Response): void {
   const redirectUri = String(req.body.redirect_uri ?? '');
   const state = String(req.body.state ?? '');
   const codeChallenge = req.body.code_challenge ? String(req.body.code_challenge) : undefined;
-  const scope = String(req.body.scope ?? SCOPE);
+  const scope = String(req.body.scope ?? AUTHORIZATION_SCOPES);
   const resource = req.body.resource ? String(req.body.resource) : undefined;
   const adminToken = String(req.body.admin_token ?? '');
 
@@ -195,6 +198,7 @@ export function exchangeToken(req: Request, res: Response): void {
       return;
     }
 
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
       access_token: config.MCP_BEARER_TOKEN,
       token_type: 'Bearer',
@@ -212,12 +216,13 @@ export function exchangeToken(req: Request, res: Response): void {
       return;
     }
 
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
       access_token: config.MCP_BEARER_TOKEN,
       token_type: 'Bearer',
       expires_in: 3600,
       refresh_token: config.MCP_BEARER_TOKEN,
-      scope: SCOPE,
+      scope: AUTHORIZATION_SCOPES,
     });
     return;
   }
@@ -230,7 +235,7 @@ export function requireMcpOAuth(req: Request, res: Response, next: NextFunction)
   if (!secureEqual(token, config.MCP_BEARER_TOKEN)) {
     res.setHeader(
       'WWW-Authenticate',
-      `Bearer resource_metadata="${config.PUBLIC_BASE_URL}/.well-known/oauth-protected-resource", scope="mcp:read"`,
+      `Bearer resource_metadata="${config.PUBLIC_BASE_URL}/.well-known/oauth-protected-resource", scope="${RESOURCE_SCOPE}"`,
     );
     res.status(401).json({ error: 'Unauthorized' });
     return;
