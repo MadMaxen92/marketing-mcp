@@ -13,6 +13,81 @@ type Money = {
   currencyCode: string;
 };
 
+type MoneyBag = {
+  shopMoney: Money;
+  presentmentMoney: Money;
+};
+
+type ShopifyFulfillment = {
+  id: string;
+  name: string;
+  status: string;
+  displayStatus?: string | null;
+  createdAt: string;
+  inTransitAt?: string | null;
+  deliveredAt?: string | null;
+  estimatedDeliveryAt?: string | null;
+  requiresShipping: boolean;
+  trackingInfo: Array<{ company?: string | null }>;
+  events: {
+    nodes: Array<{
+      status: string;
+      happenedAt: string;
+      estimatedDeliveryAt?: string | null;
+    }>;
+    pageInfo: { hasNextPage: boolean };
+  };
+  fulfillmentLineItems: {
+    nodes: Array<{
+      quantity?: number | null;
+      lineItem: { id: string; name: string; sku?: string | null };
+    }>;
+    pageInfo: { hasNextPage: boolean };
+  };
+};
+
+export type ShopifyOrderDetail = {
+  id: string;
+  name: string;
+  createdAt: string;
+  processedAt?: string | null;
+  cancelledAt?: string | null;
+  test: boolean;
+  displayFinancialStatus?: string | null;
+  displayFulfillmentStatus?: string | null;
+  shippingAddress?: { country?: string | null; countryCodeV2?: string | null } | null;
+  currentSubtotalPriceSet: MoneyBag;
+  currentShippingPriceSet: MoneyBag;
+  currentTotalTaxSet: MoneyBag;
+  currentTotalPriceSet: MoneyBag;
+  shippingLines: {
+    nodes: Array<{
+      title: string;
+      code?: string | null;
+      currentDiscountedPriceSet: MoneyBag;
+    }>;
+    pageInfo: { hasNextPage: boolean };
+  };
+  lineItems: {
+    nodes: Array<{
+      id: string;
+      name: string;
+      title: string;
+      variantTitle?: string | null;
+      sku?: string | null;
+      quantity: number;
+      currentQuantity: number;
+      requiresShipping: boolean;
+      originalUnitPriceSet: MoneyBag;
+      originalTotalSet: MoneyBag;
+      priceAfterAllDiscountsBeforeTaxesSet: MoneyBag;
+      totalDiscountSet: MoneyBag;
+    }>;
+    pageInfo: { hasNextPage: boolean };
+  };
+  fulfillments: ShopifyFulfillment[];
+};
+
 export type ShopifyOrder = {
   id: string;
   name: string;
@@ -109,6 +184,120 @@ function assertIsoDate(value: string, label: string): void {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
     throw new Error(`${label} must be a valid YYYY-MM-DD date.`);
   }
+}
+
+function moneyBag(value: MoneyBag): { shopMoney: { amount: number; currencyCode: string }; presentmentMoney: { amount: number; currencyCode: string } } {
+  return {
+    shopMoney: { amount: Number(value.shopMoney.amount), currencyCode: value.shopMoney.currencyCode },
+    presentmentMoney: {
+      amount: Number(value.presentmentMoney.amount),
+      currencyCode: value.presentmentMoney.currencyCode,
+    },
+  };
+}
+
+function earliest(values: Array<string | null | undefined>): string | undefined {
+  return values.filter((value): value is string => !!value).sort()[0];
+}
+
+function latest(values: Array<string | null | undefined>): string | undefined {
+  return values.filter((value): value is string => !!value).sort().at(-1);
+}
+
+function hoursBetween(start: string | undefined, end: string | undefined): number | undefined {
+  if (!start || !end) return undefined;
+  return Number(((Date.parse(end) - Date.parse(start)) / 3_600_000).toFixed(2));
+}
+
+export function summarizeShopifyOrderDetail(order: ShopifyOrderDetail): any {
+  const shippingFulfillments = order.fulfillments.filter((fulfillment) =>
+    fulfillment.requiresShipping && fulfillment.status !== 'CANCELLED',
+  );
+  const fulfillmentCreatedAt = earliest(shippingFulfillments.map(({ createdAt }) => createdAt));
+  const carrierInTransitAt = earliest(shippingFulfillments.map(({ inTransitAt }) => inTransitAt));
+  const firstShippedAt = earliest(
+    shippingFulfillments.map(({ createdAt, inTransitAt }) => inTransitAt ?? createdAt),
+  );
+  const fullyDeliveredAt = shippingFulfillments.length > 0
+    && shippingFulfillments.every(({ deliveredAt }) => !!deliveredAt)
+    ? latest(shippingFulfillments.map(({ deliveredAt }) => deliveredAt))
+    : undefined;
+
+  return {
+    id: order.id,
+    orderName: order.name,
+    orderedAt: order.createdAt,
+    processedAt: order.processedAt,
+    cancelledAt: order.cancelledAt,
+    test: order.test,
+    financialStatus: order.displayFinancialStatus,
+    fulfillmentStatus: order.displayFulfillmentStatus,
+    destination: {
+      country: order.shippingAddress?.country,
+      countryCode: order.shippingAddress?.countryCodeV2,
+    },
+    customerCosts: {
+      products: moneyBag(order.currentSubtotalPriceSet),
+      shipping: moneyBag(order.currentShippingPriceSet),
+      tax: moneyBag(order.currentTotalTaxSet),
+      total: moneyBag(order.currentTotalPriceSet),
+    },
+    shippingMethods: order.shippingLines.nodes.map((line) => ({
+      title: line.title,
+      code: line.code,
+      currentPrice: moneyBag(line.currentDiscountedPriceSet),
+    })),
+    products: order.lineItems.nodes.map((item) => ({
+      lineItemId: item.id,
+      name: item.name,
+      title: item.title,
+      variantTitle: item.variantTitle,
+      sku: item.sku,
+      quantityOrdered: item.quantity,
+      currentQuantity: item.currentQuantity,
+      requiresShipping: item.requiresShipping,
+      originalUnitPrice: moneyBag(item.originalUnitPriceSet),
+      originalTotal: moneyBag(item.originalTotalSet),
+      productCostAfterAllDiscountsBeforeTax: moneyBag(item.priceAfterAllDiscountsBeforeTaxesSet),
+      lineDiscount: moneyBag(item.totalDiscountSet),
+    })),
+    deliveryTimeline: {
+      fulfillmentCreatedAt,
+      carrierInTransitAt,
+      firstShippedAt,
+      fullyDeliveredAt,
+      orderToFulfillmentHours: hoursBetween(order.createdAt, fulfillmentCreatedAt),
+      orderToFirstShipmentHours: hoursBetween(order.createdAt, firstShippedAt),
+      firstShipmentToFullDeliveryHours: hoursBetween(firstShippedAt, fullyDeliveredAt),
+      orderToFullDeliveryHours: hoursBetween(order.createdAt, fullyDeliveredAt),
+      complete: !!fullyDeliveredAt,
+    },
+    fulfillments: order.fulfillments.map((fulfillment) => ({
+      id: fulfillment.id,
+      name: fulfillment.name,
+      status: fulfillment.status,
+      displayStatus: fulfillment.displayStatus,
+      createdAt: fulfillment.createdAt,
+      inTransitAt: fulfillment.inTransitAt,
+      deliveredAt: fulfillment.deliveredAt,
+      estimatedDeliveryAt: fulfillment.estimatedDeliveryAt,
+      requiresShipping: fulfillment.requiresShipping,
+      carrierCompanies: [...new Set(fulfillment.trackingInfo.map(({ company }) => company).filter(Boolean))],
+      lineItems: fulfillment.fulfillmentLineItems.nodes.map(({ quantity, lineItem }) => ({
+        lineItemId: lineItem.id,
+        name: lineItem.name,
+        sku: lineItem.sku,
+        quantity,
+      })),
+      events: fulfillment.events.nodes,
+      eventsTruncated: fulfillment.events.pageInfo.hasNextPage,
+      lineItemsTruncated: fulfillment.fulfillmentLineItems.pageInfo.hasNextPage,
+    })),
+    dataCompleteness: {
+      lineItemsTruncated: order.lineItems.pageInfo.hasNextPage,
+      shippingLinesTruncated: order.shippingLines.pageInfo.hasNextPage,
+    },
+  };
 }
 
 export function buildShopifyOrdersSearchQuery(input: {
@@ -296,5 +485,107 @@ export async function getShopifySalesOverview(input: {
     truncated: hasNextPage,
     nextPageToken: hasNextPage ? cursor : undefined,
     ...summarizeShopifyOrders(orders, input.includeCancelled),
+  };
+}
+
+export async function listShopifyOrderDeliveryDetails(input: {
+  startDate: string;
+  endDate: string;
+  includeCancelled?: boolean;
+  includeTest?: boolean;
+  limit?: number;
+  pageToken?: string;
+}): Promise<any> {
+  const searchQuery = buildShopifyOrdersSearchQuery(input);
+  const first = Math.min(Math.max(input.limit ?? 50, 1), 250);
+  const data = await shopifyGraphql<{
+    orders: {
+      nodes: ShopifyOrderDetail[];
+      pageInfo: { hasNextPage: boolean; endCursor?: string };
+    };
+  }>(`query ShopifyOrderDeliveryDetails($first: Int!, $after: String, $query: String!) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
+      nodes {
+        id
+        name
+        createdAt
+        processedAt
+        cancelledAt
+        test
+        displayFinancialStatus
+        displayFulfillmentStatus
+        shippingAddress { country countryCodeV2 }
+        currentSubtotalPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+        currentShippingPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+        currentTotalTaxSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+        currentTotalPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+        shippingLines(first: 20) {
+          nodes {
+            title
+            code
+            currentDiscountedPriceSet {
+              shopMoney { amount currencyCode }
+              presentmentMoney { amount currencyCode }
+            }
+          }
+          pageInfo { hasNextPage }
+        }
+        lineItems(first: 100) {
+          nodes {
+            id
+            name
+            title
+            variantTitle
+            sku
+            quantity
+            currentQuantity
+            requiresShipping
+            originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+            originalTotalSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+            priceAfterAllDiscountsBeforeTaxesSet {
+              shopMoney { amount currencyCode }
+              presentmentMoney { amount currencyCode }
+            }
+            totalDiscountSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+          }
+          pageInfo { hasNextPage }
+        }
+        fulfillments {
+          id
+          name
+          status
+          displayStatus
+          createdAt
+          inTransitAt
+          deliveredAt
+          estimatedDeliveryAt
+          requiresShipping
+          trackingInfo(first: 10) { company }
+          events(first: 50, sortKey: HAPPENED_AT) {
+            nodes { status happenedAt estimatedDeliveryAt }
+            pageInfo { hasNextPage }
+          }
+          fulfillmentLineItems(first: 100) {
+            nodes { quantity lineItem { id name sku } }
+            pageInfo { hasNextPage }
+          }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`, { first, after: input.pageToken, query: searchQuery });
+
+  const includedOrders = data.orders.nodes.filter((order) => input.includeCancelled || !order.cancelledAt);
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    startDate: input.startDate,
+    endDate: input.endDate,
+    includeCancelled: input.includeCancelled ?? false,
+    includeTest: input.includeTest ?? false,
+    returnedOrders: includedOrders.length,
+    excludedCancelledOrders: data.orders.nodes.length - includedOrders.length,
+    nextPageToken: data.orders.pageInfo.hasNextPage ? data.orders.pageInfo.endCursor : undefined,
+    orders: includedOrders.map(summarizeShopifyOrderDetail),
   };
 }

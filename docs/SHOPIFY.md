@@ -6,17 +6,25 @@ last 24 hours and are requested and cached by the service automatically.
 
 ## Data and privacy scope
 
-Configure only these app scopes for the first version:
+Configure these app scopes:
 
 - `read_orders`
 - `read_products`
+- `read_all_orders` when historical order analysis beyond 60 days is needed and
+  Shopify has granted access
 
 Do not grant `read_customers`. The MCP tools intentionally request no customer
 names, email addresses, phone numbers, or postal addresses.
 
 `read_orders` normally covers the most recent 60 days. Access to older orders
-requires Shopify approval for `read_all_orders`; that scope is not required for
-the initial integration.
+requires Shopify approval for `read_all_orders` in addition to `read_orders`.
+
+The order-delivery tool processes protected order and fulfillment data. It
+requests only the destination country and ISO country code, never the customer's
+name, street, city, postal code, email address, phone number, coordinates, or
+tracking number. If Shopify redacts the destination country, configure the app's
+protected customer data access in the Dev Dashboard before reinstalling or
+updating the app.
 
 ## Create and install the Shopify app
 
@@ -62,12 +70,25 @@ curl -fsS http://127.0.0.1:8000/health
   with product pagination.
 - `get_shopify_sales_overview`: aggregates order count, current net revenue,
   subtotal, AOV, financial and fulfillment statuses, and UTC daily totals.
+- `list_shopify_order_delivery_details`: returns per-order destination country,
+  products and quantities, original and discounted product costs, shipping cost,
+  tax, total, shipping method, fulfillment events, and delivery durations.
 
 The sales tool excludes test and cancelled orders by default, processes up to
 1,000 orders by default, and reports when the configured cap truncates a result.
+
+The delivery-detail tool excludes test and cancelled orders by default and
+returns up to 50 recent orders in the selected date range per page. For split
+shipments, `firstShippedAt` is the first known carrier in-transit timestamp, or
+the fulfillment creation timestamp when no carrier timestamp exists.
+`fullyDeliveredAt` is the last delivery timestamp only when every active physical
+fulfillment has a delivery timestamp. Carrier-dependent timestamps can be null
+when Shopify has not received the corresponding tracking event.
 
 ## Initial verification prompts
 
 1. `Prüfe die Shopify-Verbindung und zeige die freigegebenen Scopes.`
 2. `Liste die ersten 20 aktiven Shopify-Produkte auf.`
 3. `Zeige den Shopify-Umsatzüberblick für die letzten 30 vollständigen Tage.`
+4. `Zeige pro Shopify-Bestellung der letzten 30 Tage Zielland, Produkte,
+   Produkt- und Versandkosten sowie die Dauer bis Versand und Zustellung.`

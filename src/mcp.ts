@@ -19,7 +19,12 @@ import {
   runMerchantCenterQuery,
 } from './merchant-center.js';
 import { readStore } from './token-store.js';
-import { getShopifySalesOverview, getShopifyShopOverview, listShopifyProducts } from './shopify.js';
+import {
+  getShopifySalesOverview,
+  getShopifyShopOverview,
+  listShopifyOrderDeliveryDetails,
+  listShopifyProducts,
+} from './shopify.js';
 
 function result(value: unknown) {
   return {
@@ -28,7 +33,7 @@ function result(value: unknown) {
 }
 
 export function createMarketingMcpServer(): McpServer {
-  const server = new McpServer({ name: 'marketing-mcp', version: '0.3.0' });
+  const server = new McpServer({ name: 'marketing-mcp', version: '0.4.0' });
 
   server.tool(
     'list_google_connections',
@@ -270,6 +275,20 @@ export function createMarketingMcpServer(): McpServer {
       maxOrders: z.number().int().min(1).max(5000).default(1000),
     },
     async (input) => result(await getShopifySalesOverview(input)),
+  );
+
+  server.tool(
+    'list_shopify_order_delivery_details',
+    'Returns per-order destination country, purchased products, customer product/shipping costs, and fulfillment/delivery durations. Excludes customer identity, street address, postal code, phone, email, and tracking numbers.',
+    {
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      includeCancelled: z.boolean().default(false),
+      includeTest: z.boolean().default(false),
+      limit: z.number().int().min(1).max(250).default(50),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await listShopifyOrderDeliveryDetails(input)),
   );
 
   return server;

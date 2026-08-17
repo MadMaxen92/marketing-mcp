@@ -22,8 +22,14 @@ Object.assign(process.env, {
 const {
   buildShopifyOrdersSearchQuery,
   getShopifyShopOverview,
+  summarizeShopifyOrderDetail,
   summarizeShopifyOrders,
 } = await import('./shopify.js');
+
+const money = (amount: string, currencyCode = 'GBP') => ({
+  shopMoney: { amount, currencyCode },
+  presentmentMoney: { amount, currencyCode },
+});
 
 test('builds a bounded Shopify order search without test orders', () => {
   assert.equal(
@@ -73,6 +79,87 @@ test('summarizes current order value and excludes cancelled orders by default', 
     fulfillmentStatuses: { FULFILLED: 1 },
     daily: [{ date: '2026-07-10', orders: 1, revenue: 120.5, subtotal: 100 }],
   });
+});
+
+test('returns country, product and shipping costs, and complete delivery durations without customer identity', () => {
+  const result = summarizeShopifyOrderDetail({
+    id: 'gid://shopify/Order/1001',
+    name: '#1001',
+    createdAt: '2026-08-01T08:00:00Z',
+    processedAt: '2026-08-01T08:05:00Z',
+    cancelledAt: null,
+    test: false,
+    displayFinancialStatus: 'PAID',
+    displayFulfillmentStatus: 'FULFILLED',
+    shippingAddress: { country: 'Germany', countryCodeV2: 'DE' },
+    currentSubtotalPriceSet: money('100.00'),
+    currentShippingPriceSet: money('8.00'),
+    currentTotalTaxSet: money('18.00'),
+    currentTotalPriceSet: money('108.00'),
+    shippingLines: {
+      nodes: [{ title: 'Standard', code: 'STANDARD', currentDiscountedPriceSet: money('8.00') }],
+      pageInfo: { hasNextPage: false },
+    },
+    lineItems: {
+      nodes: [{
+        id: 'gid://shopify/LineItem/1',
+        name: 'Surfboard / Blue',
+        title: 'Surfboard',
+        variantTitle: 'Blue',
+        sku: 'SURF-BLUE',
+        quantity: 1,
+        currentQuantity: 1,
+        requiresShipping: true,
+        originalUnitPriceSet: money('110.00'),
+        originalTotalSet: money('110.00'),
+        priceAfterAllDiscountsBeforeTaxesSet: money('100.00'),
+        totalDiscountSet: money('10.00'),
+      }],
+      pageInfo: { hasNextPage: false },
+    },
+    fulfillments: [{
+      id: 'gid://shopify/Fulfillment/1',
+      name: '#1001.1',
+      status: 'SUCCESS',
+      displayStatus: 'DELIVERED',
+      createdAt: '2026-08-02T08:00:00Z',
+      inTransitAt: '2026-08-02T20:00:00Z',
+      deliveredAt: '2026-08-05T20:00:00Z',
+      estimatedDeliveryAt: '2026-08-06T20:00:00Z',
+      requiresShipping: true,
+      trackingInfo: [{ company: 'Test Carrier' }],
+      events: {
+        nodes: [{ status: 'DELIVERED', happenedAt: '2026-08-05T20:00:00Z' }],
+        pageInfo: { hasNextPage: false },
+      },
+      fulfillmentLineItems: {
+        nodes: [{
+          quantity: 1,
+          lineItem: { id: 'gid://shopify/LineItem/1', name: 'Surfboard / Blue', sku: 'SURF-BLUE' },
+        }],
+        pageInfo: { hasNextPage: false },
+      },
+    }],
+  });
+
+  assert.deepEqual(result.destination, { country: 'Germany', countryCode: 'DE' });
+  assert.equal(result.customerCosts.products.presentmentMoney.amount, 100);
+  assert.equal(result.customerCosts.shipping.presentmentMoney.amount, 8);
+  assert.equal(result.products[0].sku, 'SURF-BLUE');
+  assert.equal(result.products[0].productCostAfterAllDiscountsBeforeTax.shopMoney.amount, 100);
+  assert.deepEqual(result.deliveryTimeline, {
+    fulfillmentCreatedAt: '2026-08-02T08:00:00Z',
+    carrierInTransitAt: '2026-08-02T20:00:00Z',
+    firstShippedAt: '2026-08-02T20:00:00Z',
+    fullyDeliveredAt: '2026-08-05T20:00:00Z',
+    orderToFulfillmentHours: 24,
+    orderToFirstShipmentHours: 36,
+    firstShipmentToFullDeliveryHours: 72,
+    orderToFullDeliveryHours: 108,
+    complete: true,
+  });
+  assert.equal(JSON.stringify(result).includes('trackingNumber'), false);
+  assert.equal(JSON.stringify(result).includes('address1'), false);
 });
 
 test('exchanges client credentials and verifies the granted read-only scopes', async (context) => {
