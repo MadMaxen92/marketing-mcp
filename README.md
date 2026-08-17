@@ -17,6 +17,8 @@ eligibility, product performance, price insights, and advanced read-only MCQL
 queries. See [docs/MERCHANT_CENTER.md](docs/MERCHANT_CENTER.md) for setup and usage.
 
 Shopify uses a merchant-owned Dev Dashboard app with short-lived client-credentials
-tokens and read-only scopes. See [docs/SHOPIFY.md](docs/SHOPIFY.md).
+tokens. Product descriptions can be changed only through a preview plus an exact,
+short-lived confirmation code; prices, inventory, publication state, and themes
+remain read-only. See [docs/SHOPIFY.md](docs/SHOPIFY.md).
 
 > Never commit `.env` files, OAuth client secrets, refresh tokens, or private keys.
