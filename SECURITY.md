@@ -4,6 +4,7 @@
 - The MCP endpoint is protected with a long bearer token.
 - Google refresh tokens are encrypted at rest with AES-256-GCM.
 - Shopify client credentials stay in `.env`; short-lived access tokens stay in memory.
+- Shopify order delivery analytics use only destination country and exclude customer identity, detailed addresses, contact details, and tracking numbers.
 - The server exposes read-only Google and Shopify tools.
 - Keep Docker, Node.js, Nginx, and host packages patched.
 - Back up the encrypted token store and encryption key separately.
