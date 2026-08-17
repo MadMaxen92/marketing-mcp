@@ -1,11 +1,33 @@
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { config } from './config.js';
 
 export const SHOPIFY_API_VERSION = '2026-07';
+const SHOPIFY_WRITE_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 
 type ShopifyCredentials = {
   shop: string;
   clientId: string;
   clientSecret: string;
+};
+
+type ShopifyProductDescription = {
+  id: string;
+  title: string;
+  handle: string;
+  status: string;
+  descriptionHtml: string;
+  updatedAt: string;
+};
+
+type ShopifyProductDescriptionConfirmation = {
+  version: 1;
+  shop: string;
+  productId: string;
+  expectedUpdatedAt: string;
+  currentDescriptionHash: string;
+  proposedDescriptionHash: string;
+  confirmationCode: string;
+  expiresAt: string;
 };
 
 type Money = {
@@ -178,6 +200,101 @@ async function shopifyGraphql<T>(query: string, variables: Record<string, unknow
   if (body.errors?.length) throw new Error(`Shopify GraphQL error: ${JSON.stringify(body.errors)}`);
   if (!body.data) throw new Error('Shopify GraphQL response did not contain data.');
   return body.data;
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function signConfirmation(payload: ShopifyProductDescriptionConfirmation): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function verifyConfirmation(token: string): ShopifyProductDescriptionConfirmation {
+  const [encoded, signature, extra] = token.split('.');
+  if (!encoded || !signature || extra) throw new Error('Invalid Shopify confirmation token. Create a new preview.');
+  const expected = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest();
+  let received: Buffer;
+  try {
+    received = Buffer.from(signature, 'base64url');
+  } catch {
+    throw new Error('Invalid Shopify confirmation token. Create a new preview.');
+  }
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+    throw new Error('Invalid Shopify confirmation token. Create a new preview.');
+  }
+
+  let payload: ShopifyProductDescriptionConfirmation;
+  try {
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('Invalid Shopify confirmation token. Create a new preview.');
+  }
+  if (
+    payload.version !== 1
+    || typeof payload.shop !== 'string'
+    || typeof payload.productId !== 'string'
+    || typeof payload.expectedUpdatedAt !== 'string'
+    || !/^[a-f0-9]{64}$/.test(payload.currentDescriptionHash)
+    || !/^[a-f0-9]{64}$/.test(payload.proposedDescriptionHash)
+    || !/^SHOPIFY-[A-F0-9]{8}$/.test(payload.confirmationCode)
+    || typeof payload.expiresAt !== 'string'
+    || !Number.isFinite(Date.parse(payload.expiresAt))
+  ) {
+    throw new Error('Invalid Shopify confirmation token. Create a new preview.');
+  }
+  if (Date.parse(payload.expiresAt) <= Date.now()) {
+    throw new Error('Shopify confirmation expired. Create a new preview.');
+  }
+  return payload;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+export function shopifyDescriptionTextToHtml(descriptionText: string): string {
+  const normalized = descriptionText.replace(/\r\n?/g, '\n').trim();
+  if (!normalized) return '';
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replaceAll('\n', '<br>')}</p>`)
+    .join('');
+}
+
+async function getShopifyProductDescription(productId: string): Promise<{
+  product: ShopifyProductDescription;
+  accessScopes: string[];
+}> {
+  const data = await shopifyGraphql<{
+    node?: ShopifyProductDescription | null;
+    currentAppInstallation: { accessScopes: Array<{ handle: string }> };
+  }>(`query ShopifyProductDescription($id: ID!) {
+    node(id: $id) {
+      ... on Product {
+        id
+        title
+        handle
+        status
+        descriptionHtml
+        updatedAt
+      }
+    }
+    currentAppInstallation { accessScopes { handle } }
+  }`, { id: productId });
+  if (!data.node?.id || !data.node.id.startsWith('gid://shopify/Product/')) {
+    throw new Error(`Shopify product not found: ${productId}`);
+  }
+  const accessScopes = data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort();
+  if (!accessScopes.includes('write_products')) {
+    throw new Error('Shopify write_products is not granted to the installed app.');
+  }
+  return { product: data.node, accessScopes };
 }
 
 function assertIsoDate(value: string, label: string): void {
@@ -429,6 +546,123 @@ export async function listShopifyProducts(input: {
     shop: getCredentials().shop,
     products: data.products.nodes,
     nextPageToken: data.products.pageInfo.hasNextPage ? data.products.pageInfo.endCursor : undefined,
+  };
+}
+
+export async function previewShopifyProductDescriptionUpdate(input: {
+  productId: string;
+  descriptionText: string;
+}): Promise<any> {
+  const { product, accessScopes } = await getShopifyProductDescription(input.productId);
+  const proposedDescriptionHtml = shopifyDescriptionTextToHtml(input.descriptionText);
+  const confirmationCode = `SHOPIFY-${randomBytes(4).toString('hex').toUpperCase()}`;
+  const expiresAt = new Date(Date.now() + SHOPIFY_WRITE_CONFIRMATION_TTL_MS).toISOString();
+  const confirmation: ShopifyProductDescriptionConfirmation = {
+    version: 1,
+    shop: getCredentials().shop,
+    productId: product.id,
+    expectedUpdatedAt: product.updatedAt,
+    currentDescriptionHash: sha256(product.descriptionHtml),
+    proposedDescriptionHash: sha256(proposedDescriptionHtml),
+    confirmationCode,
+    expiresAt,
+  };
+
+  return {
+    dryRun: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    product: {
+      id: product.id,
+      title: product.title,
+      handle: product.handle,
+      status: product.status,
+      updatedAt: product.updatedAt,
+    },
+    change: {
+      field: 'descriptionHtml',
+      currentDescriptionHtml: product.descriptionHtml,
+      proposedDescriptionHtml,
+      currentCharacterCount: product.descriptionHtml.length,
+      proposedCharacterCount: proposedDescriptionHtml.length,
+    },
+    safety: {
+      accessScopes,
+      touchesOnly: ['descriptionHtml'],
+      confirmationCode,
+      expiresAt,
+      instruction: `Show this preview to the user. Apply it only after the user explicitly replies with ${confirmationCode}.`,
+    },
+    confirmationToken: signConfirmation(confirmation),
+  };
+}
+
+export async function applyShopifyProductDescriptionUpdate(input: {
+  productId: string;
+  descriptionText: string;
+  confirmationCode: string;
+  confirmationToken: string;
+}): Promise<any> {
+  const confirmation = verifyConfirmation(input.confirmationToken);
+  const proposedDescriptionHtml = shopifyDescriptionTextToHtml(input.descriptionText);
+  const { shop } = getCredentials();
+  if (
+    confirmation.shop !== shop
+    || confirmation.productId !== input.productId
+    || confirmation.confirmationCode !== input.confirmationCode
+    || confirmation.proposedDescriptionHash !== sha256(proposedDescriptionHtml)
+  ) {
+    throw new Error('Shopify confirmation does not match this product and description. Create a new preview.');
+  }
+
+  const { product } = await getShopifyProductDescription(input.productId);
+  if (
+    product.updatedAt !== confirmation.expectedUpdatedAt
+    || sha256(product.descriptionHtml) !== confirmation.currentDescriptionHash
+  ) {
+    throw new Error('The Shopify product changed after the preview. Review the latest product and create a new preview.');
+  }
+
+  const data = await shopifyGraphql<{
+    productUpdate: {
+      product?: ShopifyProductDescription | null;
+      userErrors: Array<{ field?: string[] | null; message: string }>;
+    };
+  }>(`mutation ShopifyProductDescriptionUpdate($product: ProductUpdateInput!) {
+    productUpdate(product: $product) {
+      product { id title handle status descriptionHtml updatedAt }
+      userErrors { field message }
+    }
+  }`, {
+    product: {
+      id: input.productId,
+      descriptionHtml: proposedDescriptionHtml,
+    },
+  });
+  if (data.productUpdate.userErrors.length) {
+    throw new Error(`Shopify rejected the product update: ${JSON.stringify(data.productUpdate.userErrors)}`);
+  }
+  if (!data.productUpdate.product) throw new Error('Shopify did not return the updated product.');
+
+  console.info(JSON.stringify({
+    event: 'shopify_product_description_updated',
+    shop,
+    productId: input.productId,
+    previousDescriptionHash: confirmation.currentDescriptionHash,
+    newDescriptionHash: confirmation.proposedDescriptionHash,
+    updatedAt: data.productUpdate.product.updatedAt,
+  }));
+
+  return {
+    applied: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop,
+    product: data.productUpdate.product,
+    changedFields: ['descriptionHtml'],
+    rollback: {
+      previousDescriptionHtml: product.descriptionHtml,
+      instruction: 'To restore this text, create a new preview using its plain-text equivalent and confirm that preview separately.',
+    },
   };
 }
 

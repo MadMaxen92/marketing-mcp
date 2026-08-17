@@ -30,6 +30,9 @@ Merchant Center calls use the stable Merchant API v1 endpoints for accounts,
 reports, products, and issue resolution. No legacy Content API for Shopping
 endpoint is used.
 
-Shopify calls use the stable GraphQL Admin API `2026-07`. Only order and product
-read scopes are requested, and the exposed tools do not query customer identity
-fields.
+Shopify calls use the stable GraphQL Admin API `2026-07`. Order tools remain
+read-only and do not query customer identity fields. Product descriptions use a
+separate two-step write path: a dry-run reads the current description and issues
+an HMAC-signed confirmation bound to the shop, product, proposed text, current
+product version, and a ten-minute expiry. The apply tool accepts only that exact
+preview and sends only `id` and `descriptionHtml` to `productUpdate`.

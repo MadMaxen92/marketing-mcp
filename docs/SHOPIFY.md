@@ -10,6 +10,7 @@ Configure these app scopes:
 
 - `read_orders`
 - `read_products`
+- `write_products` for the guarded product-description update flow
 - `read_all_orders` when historical order analysis beyond 60 days is needed and
   Shopify has granted access
 
@@ -33,10 +34,10 @@ updating the app.
 2. Go to **Apps**, select **Create app**, then **Start from Dev Dashboard**.
 3. Name the app `Marketing Data Hub`.
 4. Create a version. The app is API-only, so it can use Shopify's default app URL.
-5. Select GraphQL Admin API scopes `read_orders` and `read_products`, then release
-   the version.
+5. Select GraphQL Admin API scopes `read_orders`, `read_products`, and
+   `write_products`, then release the version.
 6. From the app home, select **Install app**, choose the production store, review
-   the two read-only permissions, and install it.
+   the permissions, and install or update it.
 7. Open the app's **Settings** page and copy the Client ID and Client secret.
 
 The app and store must be in the same Shopify organization for the
@@ -73,6 +74,22 @@ curl -fsS http://127.0.0.1:8000/health
 - `list_shopify_order_delivery_details`: returns per-order destination country,
   products and quantities, original and discounted product costs, shipping cost,
   tax, total, shipping method, fulfillment events, and delivery durations.
+- `preview_shopify_product_description_update`: reads one product and returns the
+  current and proposed description HTML plus a signed confirmation token and an
+  exact `SHOPIFY-XXXXXXXX` confirmation code. It never writes.
+- `apply_shopify_product_description_update`: accepts only the unchanged text,
+  token, product ID, and exact confirmation code from a preview that is at most
+  ten minutes old. It aborts if the product changed after preview creation.
+
+The write path accepts plain text rather than arbitrary HTML. It escapes HTML
+characters, converts blank lines to paragraphs, and converts single line breaks
+to `<br>`. Its Shopify mutation contains only `id` and `descriptionHtml`; it
+cannot change price, inventory, title, tags, SEO, status, publishing, or theme
+data. The apply tool must not be called until the full preview has been shown and
+the user has explicitly replied with the exact confirmation code. Audit logs
+contain product and description hashes, never the description text or token. A
+successful result returns the previous description for a separately confirmed
+rollback.
 
 The sales tool excludes test and cancelled orders by default, processes up to
 1,000 orders by default, and reports when the configured cap truncates a result.
@@ -92,3 +109,5 @@ when Shopify has not received the corresponding tracking event.
 3. `Zeige den Shopify-Umsatzüberblick für die letzten 30 vollständigen Tage.`
 4. `Zeige pro Shopify-Bestellung der letzten 30 Tage Zielland, Produkte,
    Produkt- und Versandkosten sowie die Dauer bis Versand und Zustellung.`
+5. `Erstelle nur eine Vorschau für eine neue Beschreibung von Produkt <ID>.`
+6. After reviewing the preview, confirm with the exact code shown by the tool.

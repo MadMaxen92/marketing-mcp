@@ -20,8 +20,11 @@ Object.assign(process.env, {
 });
 
 const {
+  applyShopifyProductDescriptionUpdate,
   buildShopifyOrdersSearchQuery,
   getShopifyShopOverview,
+  previewShopifyProductDescriptionUpdate,
+  shopifyDescriptionTextToHtml,
   summarizeShopifyOrderDetail,
   summarizeShopifyOrders,
 } = await import('./shopify.js');
@@ -206,4 +209,119 @@ test('exchanges client credentials and verifies the granted read-only scopes', a
   assert.equal(overview.shop.name, 'Mambo');
   assert.deepEqual(overview.accessScopes, ['read_orders', 'read_products']);
   assert.equal(requestNumber, 2);
+});
+
+test('converts product description text to safe minimal HTML', () => {
+  assert.equal(
+    shopifyDescriptionTextToHtml('First & <script>alert(1)</script>\nline two\n\nSecond'),
+    '<p>First &amp; &lt;script&gt;alert(1)&lt;/script&gt;<br>line two</p><p>Second</p>',
+  );
+  assert.equal(shopifyDescriptionTextToHtml('   '), '');
+});
+
+test('requires an exact short-lived preview before updating only descriptionHtml', async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  context.mock.method(console, 'info', () => undefined);
+
+  const productId = 'gid://shopify/Product/123';
+  const currentProduct = {
+    id: productId,
+    title: 'Mambo Board',
+    handle: 'mambo-board',
+    status: 'ACTIVE',
+    descriptionHtml: '<p>Old description</p>',
+    updatedAt: '2026-08-17T08:00:00Z',
+  };
+  let graphqlRequestNumber = 0;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/admin/oauth/access_token')) {
+      return new Response(JSON.stringify({
+        access_token: 'write-token',
+        scope: 'read_orders,read_products,write_products',
+        expires_in: 86399,
+      }), { status: 200 });
+    }
+
+    graphqlRequestNumber += 1;
+    const request = JSON.parse(String(init?.body)) as {
+      query: string;
+      variables: Record<string, any>;
+    };
+    if (request.query.includes('mutation ShopifyProductDescriptionUpdate')) {
+      assert.deepEqual(request.variables.product, {
+        id: productId,
+        descriptionHtml: '<p>New &amp; safe<br>description</p>',
+      });
+      assert.deepEqual(Object.keys(request.variables.product).sort(), ['descriptionHtml', 'id']);
+      return new Response(JSON.stringify({
+        data: {
+          productUpdate: {
+            product: {
+              ...currentProduct,
+              descriptionHtml: request.variables.product.descriptionHtml,
+              updatedAt: '2026-08-17T09:00:00Z',
+            },
+            userErrors: [],
+          },
+        },
+      }), { status: 200 });
+    }
+
+    assert.equal(request.variables.id, productId);
+    return new Response(JSON.stringify({
+      data: {
+        node: currentProduct,
+        currentAppInstallation: {
+          accessScopes: [{ handle: 'read_products' }, { handle: 'write_products' }],
+        },
+      },
+    }), { status: 200 });
+  };
+
+  const preview = await previewShopifyProductDescriptionUpdate({
+    productId,
+    descriptionText: 'New & safe\ndescription',
+  });
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.change.currentDescriptionHtml, '<p>Old description</p>');
+  assert.equal(preview.change.proposedDescriptionHtml, '<p>New &amp; safe<br>description</p>');
+  assert.match(preview.safety.confirmationCode, /^SHOPIFY-[A-F0-9]{8}$/);
+  assert.deepEqual(preview.safety.touchesOnly, ['descriptionHtml']);
+
+  await assert.rejects(
+    () => applyShopifyProductDescriptionUpdate({
+      productId,
+      descriptionText: 'Altered description',
+      confirmationCode: preview.safety.confirmationCode,
+      confirmationToken: preview.confirmationToken,
+    }),
+    /does not match/,
+  );
+
+  currentProduct.updatedAt = '2026-08-17T08:30:00Z';
+  await assert.rejects(
+    () => applyShopifyProductDescriptionUpdate({
+      productId,
+      descriptionText: 'New & safe\ndescription',
+      confirmationCode: preview.safety.confirmationCode,
+      confirmationToken: preview.confirmationToken,
+    }),
+    /changed after the preview/,
+  );
+  currentProduct.updatedAt = '2026-08-17T08:00:00Z';
+
+  const applied = await applyShopifyProductDescriptionUpdate({
+    productId,
+    descriptionText: 'New & safe\ndescription',
+    confirmationCode: preview.safety.confirmationCode,
+    confirmationToken: preview.confirmationToken,
+  });
+  assert.equal(applied.applied, true);
+  assert.deepEqual(applied.changedFields, ['descriptionHtml']);
+  assert.equal(applied.product.descriptionHtml, '<p>New &amp; safe<br>description</p>');
+  assert.equal(applied.rollback.previousDescriptionHtml, '<p>Old description</p>');
+  assert.equal(graphqlRequestNumber, 4);
 });

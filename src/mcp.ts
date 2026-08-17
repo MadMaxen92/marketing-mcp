@@ -20,10 +20,12 @@ import {
 } from './merchant-center.js';
 import { readStore } from './token-store.js';
 import {
+  applyShopifyProductDescriptionUpdate,
   getShopifySalesOverview,
   getShopifyShopOverview,
   listShopifyOrderDeliveryDetails,
   listShopifyProducts,
+  previewShopifyProductDescriptionUpdate,
 } from './shopify.js';
 
 function result(value: unknown) {
@@ -33,7 +35,7 @@ function result(value: unknown) {
 }
 
 export function createMarketingMcpServer(): McpServer {
-  const server = new McpServer({ name: 'marketing-mcp', version: '0.4.0' });
+  const server = new McpServer({ name: 'marketing-mcp', version: '0.5.0' });
 
   server.tool(
     'list_google_connections',
@@ -262,6 +264,28 @@ export function createMarketingMcpServer(): McpServer {
       pageToken: z.string().optional(),
     },
     async (input) => result(await listShopifyProducts(input)),
+  );
+
+  server.tool(
+    'preview_shopify_product_description_update',
+    'Creates a read-only preview for changing one Shopify product description. Converts plain text to safe HTML and returns a short-lived confirmation code and token. Never applies the change.',
+    {
+      productId: z.string().regex(/^gid:\/\/shopify\/Product\/\d+$/),
+      descriptionText: z.string().max(50000).describe('Plain text only. Blank lines create paragraphs; single line breaks become br tags.'),
+    },
+    async (input) => result(await previewShopifyProductDescriptionUpdate(input)),
+  );
+
+  server.tool(
+    'apply_shopify_product_description_update',
+    'Applies exactly one previously previewed Shopify product description. Call only after showing the full preview and the user explicitly replies with its exact SHOPIFY confirmation code. Rejects expired, altered, or stale previews. Cannot change prices, inventory, status, title, tags, SEO, or themes.',
+    {
+      productId: z.string().regex(/^gid:\/\/shopify\/Product\/\d+$/),
+      descriptionText: z.string().max(50000),
+      confirmationCode: z.string().regex(/^SHOPIFY-[A-F0-9]{8}$/),
+      confirmationToken: z.string().min(80).max(4000),
+    },
+    async (input) => result(await applyShopifyProductDescriptionUpdate(input)),
   );
 
   server.tool(

@@ -122,7 +122,7 @@ export function showAuthorizationPage(req: Request, res: Response): void {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Authorize Marketing MCP</title></head>
 <body style="font-family:system-ui;max-width:560px;margin:48px auto;padding:0 20px">
   <h1>Authorize Marketing MCP</h1>
-  <p>Allow ChatGPT to use the read-only tools exposed by your Marketing MCP server.</p>
+  <p>Allow ChatGPT to use the Marketing MCP tools. Analytics are read-only; Shopify product-description changes require a separate preview and exact confirmation code.</p>
   <form method="post" action="/oauth/authorize">
     ${Object.entries(hiddenFields).map(([key, value]) => `<input type="hidden" name="${key}" value="${htmlEscape(value)}">`).join('\n')}
     <label for="admin_token">Admin token</label><br>
