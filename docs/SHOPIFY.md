@@ -88,8 +88,9 @@ cannot change price, inventory, title, tags, SEO, status, publishing, or theme
 data. The apply tool must not be called until the full preview has been shown and
 the user has explicitly replied with the exact confirmation code. Audit logs
 contain product and description hashes, never the description text or token. A
-successful result returns the previous description for a separately confirmed
-rollback.
+successful result returns the previous description as a recovery snapshot. Since
+the guarded write tool accepts plain text only, rich HTML must be restored
+manually in Shopify Admin if an exact rollback is required.
 
 The sales tool excludes test and cancelled orders by default, processes up to
 1,000 orders by default, and reports when the configured cap truncates a result.

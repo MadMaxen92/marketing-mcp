@@ -659,9 +659,9 @@ export async function applyShopifyProductDescriptionUpdate(input: {
     shop,
     product: data.productUpdate.product,
     changedFields: ['descriptionHtml'],
-    rollback: {
+    recoverySnapshot: {
       previousDescriptionHtml: product.descriptionHtml,
-      instruction: 'To restore this text, create a new preview using its plain-text equivalent and confirm that preview separately.',
+      instruction: 'Keep this snapshot for reference. Rich HTML must be restored manually in Shopify Admin; the guarded write tool accepts plain text only.',
     },
   };
 }

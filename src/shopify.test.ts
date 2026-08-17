@@ -322,6 +322,6 @@ test('requires an exact short-lived preview before updating only descriptionHtml
   assert.equal(applied.applied, true);
   assert.deepEqual(applied.changedFields, ['descriptionHtml']);
   assert.equal(applied.product.descriptionHtml, '<p>New &amp; safe<br>description</p>');
-  assert.equal(applied.rollback.previousDescriptionHtml, '<p>Old description</p>');
+  assert.equal(applied.recoverySnapshot.previousDescriptionHtml, '<p>Old description</p>');
   assert.equal(graphqlRequestNumber, 4);
 });
