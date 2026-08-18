@@ -20,9 +20,14 @@ Object.assign(process.env, {
 });
 
 const {
+  applyShopifyCollectionProductsUpdate,
+  applyShopifyCollectionUpdate,
   applyShopifyProductDescriptionUpdate,
   buildShopifyOrdersSearchQuery,
   getShopifyShopOverview,
+  listShopifyCollections,
+  previewShopifyCollectionProductsUpdate,
+  previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
   shopifyDescriptionTextToHtml,
   summarizeShopifyOrderDetail,
@@ -324,4 +329,145 @@ test('requires an exact short-lived preview before updating only descriptionHtml
   assert.equal(applied.product.descriptionHtml, '<p>New &amp; safe<br>description</p>');
   assert.equal(applied.recoverySnapshot.previousDescriptionHtml, '<p>Old description</p>');
   assert.equal(graphqlRequestNumber, 4);
+});
+
+test('lists Shopify collections and guards metadata and manual product membership writes', async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  context.mock.method(console, 'info', () => undefined);
+
+  const collectionId = 'gid://shopify/Collection/456';
+  const productId = 'gid://shopify/Product/789';
+  const collection = {
+    id: collectionId,
+    title: 'Sale',
+    handle: 'sale',
+    descriptionHtml: '<p>Current sale</p>',
+    updatedAt: '2026-08-18T08:00:00Z',
+    sortOrder: 'MANUAL',
+    templateSuffix: null,
+    productsCount: { count: 14 },
+    seo: { title: 'Sale', description: 'Current offers' },
+    image: null,
+    ruleSet: null,
+  };
+  const requests: Array<{ query: string; variables: Record<string, any> }> = [];
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      query: string;
+      variables: Record<string, any>;
+    };
+    requests.push(request);
+    if (request.query.includes('query ShopifyCollections(')) {
+      assert.equal(request.variables.first, 250);
+      return new Response(JSON.stringify({
+        data: {
+          collections: {
+            nodes: [collection],
+            pageInfo: { hasNextPage: false, endCursor: 'last' },
+          },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyCollectionForWrite')) {
+      return new Response(JSON.stringify({
+        data: {
+          node: collection,
+          currentAppInstallation: {
+            accessScopes: [{ handle: 'read_products' }, { handle: 'write_products' }],
+          },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('mutation ShopifyCollectionUpdate')) {
+      assert.deepEqual(request.variables.collection, {
+        id: collectionId,
+        descriptionHtml: '<p>Fresh offers</p>',
+        seo: { title: 'Mambo Sale', description: 'Current offers' },
+      });
+      return new Response(JSON.stringify({
+        data: {
+          collectionUpdate: {
+            collection: {
+              ...collection,
+              ...request.variables.collection,
+              updatedAt: '2026-08-18T09:00:00Z',
+            },
+            userErrors: [],
+          },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyProductsByIds')) {
+      return new Response(JSON.stringify({
+        data: {
+          nodes: [{ id: productId, title: 'Mambo Tee', handle: 'mambo-tee', status: 'ACTIVE' }],
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('mutation ShopifyCollectionAddProducts')) {
+      assert.deepEqual(request.variables, { id: collectionId, productIds: [productId] });
+      return new Response(JSON.stringify({
+        data: {
+          collectionAddProducts: {
+            collection: { id: collectionId, title: 'Sale', updatedAt: '2026-08-18T09:05:00Z', productsCount: { count: 15 } },
+            userErrors: [],
+          },
+        },
+      }), { status: 200 });
+    }
+    throw new Error(`Unexpected Shopify test query: ${request.query}`);
+  };
+
+  const listed = await listShopifyCollections({ limit: 250 });
+  assert.equal(listed.collections.length, 1);
+  assert.equal(listed.collections[0].collectionType, 'MANUAL');
+  assert.equal(listed.collections[0].productsCount.count, 14);
+
+  const metadataPreview = await previewShopifyCollectionUpdate({
+    collectionId,
+    descriptionText: 'Fresh offers',
+    seoTitle: 'Mambo Sale',
+  });
+  assert.equal(metadataPreview.dryRun, true);
+  assert.deepEqual(metadataPreview.safety.touchesOnly, ['descriptionHtml', 'seo']);
+  await assert.rejects(
+    () => applyShopifyCollectionUpdate({
+      collectionId,
+      descriptionText: 'Changed after preview',
+      seoTitle: 'Mambo Sale',
+      confirmationCode: metadataPreview.safety.confirmationCode,
+      confirmationToken: metadataPreview.confirmationToken,
+    }),
+    /does not match/,
+  );
+  const metadataApplied = await applyShopifyCollectionUpdate({
+    collectionId,
+    descriptionText: 'Fresh offers',
+    seoTitle: 'Mambo Sale',
+    confirmationCode: metadataPreview.safety.confirmationCode,
+    confirmationToken: metadataPreview.confirmationToken,
+  });
+  assert.equal(metadataApplied.applied, true);
+  assert.deepEqual(metadataApplied.changedFields, ['descriptionHtml', 'seo']);
+
+  const membershipPreview = await previewShopifyCollectionProductsUpdate({
+    collectionId,
+    action: 'ADD',
+    productIds: [productId, productId],
+  });
+  assert.equal(membershipPreview.change.products.length, 1);
+  const membershipApplied = await applyShopifyCollectionProductsUpdate({
+    collectionId,
+    action: 'ADD',
+    productIds: [productId],
+    confirmationCode: membershipPreview.safety.confirmationCode,
+    confirmationToken: membershipPreview.confirmationToken,
+  });
+  assert.equal(membershipApplied.applied, true);
+  assert.deepEqual(membershipApplied.productIds, [productId]);
+  assert.equal(requests.filter(({ query }) => query.includes('mutation ShopifyCollectionUpdate')).length, 1);
+  assert.equal(requests.filter(({ query }) => query.includes('mutation ShopifyCollectionAddProducts')).length, 1);
 });

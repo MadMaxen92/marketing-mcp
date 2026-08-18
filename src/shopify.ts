@@ -30,6 +30,62 @@ type ShopifyProductDescriptionConfirmation = {
   expiresAt: string;
 };
 
+export type ShopifyCollection = {
+  id: string;
+  title: string;
+  handle: string;
+  descriptionHtml: string;
+  updatedAt: string;
+  sortOrder: string;
+  templateSuffix?: string | null;
+  productsCount: { count: number };
+  seo: { title?: string | null; description?: string | null };
+  image?: {
+    id?: string | null;
+    altText?: string | null;
+    url: string;
+    width?: number | null;
+    height?: number | null;
+  } | null;
+  ruleSet?: {
+    appliedDisjunctively: boolean;
+    rules: Array<{ column: string; relation: string; condition: string }>;
+  } | null;
+};
+
+type ShopifyCollectionUpdateInput = {
+  title?: string;
+  descriptionHtml?: string;
+  handle?: string;
+  redirectNewHandle?: boolean;
+  sortOrder?: string;
+  seo?: { title: string; description: string };
+};
+
+type ShopifyCollectionUpdateConfirmation = {
+  version: 1;
+  kind: 'collection_update';
+  shop: string;
+  collectionId: string;
+  expectedUpdatedAt: string;
+  currentStateHash: string;
+  proposedInputHash: string;
+  confirmationCode: string;
+  expiresAt: string;
+};
+
+type ShopifyCollectionProductsConfirmation = {
+  version: 1;
+  kind: 'collection_products';
+  shop: string;
+  collectionId: string;
+  expectedUpdatedAt: string;
+  action: 'ADD' | 'REMOVE';
+  productIdsHash: string;
+  confirmationCode: string;
+  expiresAt: string;
+};
+
 type Money = {
   amount: string;
   currencyCode: string;
@@ -247,6 +303,58 @@ function verifyConfirmation(token: string): ShopifyProductDescriptionConfirmatio
   }
   if (Date.parse(payload.expiresAt) <= Date.now()) {
     throw new Error('Shopify confirmation expired. Create a new preview.');
+  }
+  return payload;
+}
+
+function signCollectionConfirmation(
+  payload: ShopifyCollectionUpdateConfirmation | ShopifyCollectionProductsConfirmation,
+): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function verifyCollectionConfirmation(
+  token: string,
+): ShopifyCollectionUpdateConfirmation | ShopifyCollectionProductsConfirmation {
+  const [encoded, signature, extra] = token.split('.');
+  if (!encoded || !signature || extra) throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
+  const expected = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest();
+  let received: Buffer;
+  try {
+    received = Buffer.from(signature, 'base64url');
+  } catch {
+    throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
+  }
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+    throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
+  }
+
+  let payload: ShopifyCollectionUpdateConfirmation | ShopifyCollectionProductsConfirmation;
+  try {
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
+  }
+  const commonValid = payload.version === 1
+    && typeof payload.shop === 'string'
+    && typeof payload.collectionId === 'string'
+    && typeof payload.expectedUpdatedAt === 'string'
+    && /^SHOPIFY-[A-F0-9]{8}$/.test(payload.confirmationCode)
+    && typeof payload.expiresAt === 'string'
+    && Number.isFinite(Date.parse(payload.expiresAt));
+  const kindValid = payload.kind === 'collection_update'
+    ? /^[a-f0-9]{64}$/.test(payload.currentStateHash)
+      && /^[a-f0-9]{64}$/.test(payload.proposedInputHash)
+    : payload.kind === 'collection_products'
+      && (payload.action === 'ADD' || payload.action === 'REMOVE')
+      && /^[a-f0-9]{64}$/.test(payload.productIdsHash);
+  if (!commonValid || !kindValid) {
+    throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
+  }
+  if (Date.parse(payload.expiresAt) <= Date.now()) {
+    throw new Error('Shopify collection confirmation expired. Create a new preview.');
   }
   return payload;
 }
@@ -546,6 +654,457 @@ export async function listShopifyProducts(input: {
     shop: getCredentials().shop,
     products: data.products.nodes,
     nextPageToken: data.products.pageInfo.hasNextPage ? data.products.pageInfo.endCursor : undefined,
+  };
+}
+
+function collectionState(collection: ShopifyCollection): Record<string, unknown> {
+  return {
+    title: collection.title,
+    descriptionHtml: collection.descriptionHtml,
+    handle: collection.handle,
+    sortOrder: collection.sortOrder,
+    seo: {
+      title: collection.seo.title ?? '',
+      description: collection.seo.description ?? '',
+    },
+  };
+}
+
+async function getShopifyCollectionForWrite(collectionId: string): Promise<{
+  collection: ShopifyCollection;
+  accessScopes: string[];
+}> {
+  const data = await shopifyGraphql<{
+    node?: ShopifyCollection | null;
+    currentAppInstallation: { accessScopes: Array<{ handle: string }> };
+  }>(`query ShopifyCollectionForWrite($id: ID!) {
+    node(id: $id) {
+      ... on Collection {
+        id
+        title
+        handle
+        descriptionHtml
+        updatedAt
+        sortOrder
+        templateSuffix
+        productsCount { count }
+        seo { title description }
+        image { id altText url width height }
+        ruleSet {
+          appliedDisjunctively
+          rules { column relation condition }
+        }
+      }
+    }
+    currentAppInstallation { accessScopes { handle } }
+  }`, { id: collectionId });
+  if (!data.node?.id || !data.node.id.startsWith('gid://shopify/Collection/')) {
+    throw new Error(`Shopify collection not found: ${collectionId}`);
+  }
+  const accessScopes = data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort();
+  if (!accessScopes.includes('write_products')) {
+    throw new Error('Shopify write_products is not granted to the installed app.');
+  }
+  return { collection: data.node, accessScopes };
+}
+
+export async function listShopifyCollections(input: {
+  query?: string;
+  limit?: number;
+  pageToken?: string;
+}): Promise<any> {
+  const first = Math.min(Math.max(input.limit ?? 100, 1), 250);
+  const data = await shopifyGraphql<{
+    collections: {
+      nodes: ShopifyCollection[];
+      pageInfo: { hasNextPage: boolean; endCursor?: string };
+    };
+  }>(`query ShopifyCollections($first: Int!, $after: String, $query: String) {
+    collections(first: $first, after: $after, query: $query, sortKey: UPDATED_AT, reverse: true) {
+      nodes {
+        id
+        title
+        handle
+        descriptionHtml
+        updatedAt
+        sortOrder
+        templateSuffix
+        productsCount { count }
+        seo { title description }
+        image { id altText url width height }
+        ruleSet {
+          appliedDisjunctively
+          rules { column relation condition }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`, {
+    first,
+    after: input.pageToken,
+    query: input.query,
+  });
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    collections: data.collections.nodes.map((collection) => ({
+      ...collection,
+      collectionType: collection.ruleSet ? 'AUTOMATED' : 'MANUAL',
+    })),
+    nextPageToken: data.collections.pageInfo.hasNextPage ? data.collections.pageInfo.endCursor : undefined,
+  };
+}
+
+export async function getShopifyCollection(input: {
+  collectionId: string;
+  productLimit?: number;
+  productPageToken?: string;
+}): Promise<any> {
+  const first = Math.min(Math.max(input.productLimit ?? 100, 1), 250);
+  const data = await shopifyGraphql<{
+    node?: (ShopifyCollection & {
+      products: {
+        nodes: any[];
+        pageInfo: { hasNextPage: boolean; endCursor?: string };
+      };
+    }) | null;
+  }>(`query ShopifyCollection($id: ID!, $first: Int!, $after: String) {
+    node(id: $id) {
+      ... on Collection {
+        id
+        title
+        handle
+        descriptionHtml
+        updatedAt
+        sortOrder
+        templateSuffix
+        productsCount { count }
+        seo { title description }
+        image { id altText url width height }
+        ruleSet {
+          appliedDisjunctively
+          rules { column relation condition }
+        }
+        products(first: $first, after: $after) {
+          nodes { id title handle status vendor productType totalInventory updatedAt }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }`, {
+    id: input.collectionId,
+    first,
+    after: input.productPageToken,
+  });
+  if (!data.node?.id || !data.node.id.startsWith('gid://shopify/Collection/')) {
+    throw new Error(`Shopify collection not found: ${input.collectionId}`);
+  }
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    collection: {
+      ...data.node,
+      collectionType: data.node.ruleSet ? 'AUTOMATED' : 'MANUAL',
+      products: data.node.products.nodes,
+      nextProductPageToken: data.node.products.pageInfo.hasNextPage
+        ? data.node.products.pageInfo.endCursor
+        : undefined,
+    },
+  };
+}
+
+function buildCollectionUpdateInput(input: {
+  title?: string;
+  descriptionText?: string;
+  handle?: string;
+  sortOrder?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+}, current: ShopifyCollection): ShopifyCollectionUpdateInput {
+  const update: ShopifyCollectionUpdateInput = {};
+  if (input.title !== undefined) update.title = input.title.trim();
+  if (input.descriptionText !== undefined) {
+    update.descriptionHtml = shopifyDescriptionTextToHtml(input.descriptionText);
+  }
+  if (input.handle !== undefined) {
+    update.handle = input.handle.trim();
+    update.redirectNewHandle = true;
+  }
+  if (input.sortOrder !== undefined) update.sortOrder = input.sortOrder;
+  if (input.seoTitle !== undefined || input.seoDescription !== undefined) {
+    update.seo = {
+      title: input.seoTitle ?? current.seo.title ?? '',
+      description: input.seoDescription ?? current.seo.description ?? '',
+    };
+  }
+  if (!Object.keys(update).length) throw new Error('Specify at least one Shopify collection field to update.');
+  return update;
+}
+
+export async function previewShopifyCollectionUpdate(input: {
+  collectionId: string;
+  title?: string;
+  descriptionText?: string;
+  handle?: string;
+  sortOrder?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+}): Promise<any> {
+  const { collection, accessScopes } = await getShopifyCollectionForWrite(input.collectionId);
+  const proposedInput = buildCollectionUpdateInput(input, collection);
+  const confirmationCode = `SHOPIFY-${randomBytes(4).toString('hex').toUpperCase()}`;
+  const expiresAt = new Date(Date.now() + SHOPIFY_WRITE_CONFIRMATION_TTL_MS).toISOString();
+  const confirmation: ShopifyCollectionUpdateConfirmation = {
+    version: 1,
+    kind: 'collection_update',
+    shop: getCredentials().shop,
+    collectionId: collection.id,
+    expectedUpdatedAt: collection.updatedAt,
+    currentStateHash: sha256(JSON.stringify(collectionState(collection))),
+    proposedInputHash: sha256(JSON.stringify(proposedInput)),
+    confirmationCode,
+    expiresAt,
+  };
+  return {
+    dryRun: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    collection: {
+      id: collection.id,
+      title: collection.title,
+      handle: collection.handle,
+      collectionType: collection.ruleSet ? 'AUTOMATED' : 'MANUAL',
+      updatedAt: collection.updatedAt,
+    },
+    change: {
+      current: collectionState(collection),
+      proposedFields: proposedInput,
+    },
+    safety: {
+      accessScopes,
+      touchesOnly: Object.keys(proposedInput),
+      confirmationCode,
+      expiresAt,
+      instruction: `Show this preview to the user. Apply it only after the user explicitly replies with ${confirmationCode}.`,
+    },
+    confirmationToken: signCollectionConfirmation(confirmation),
+  };
+}
+
+export async function applyShopifyCollectionUpdate(input: {
+  collectionId: string;
+  title?: string;
+  descriptionText?: string;
+  handle?: string;
+  sortOrder?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  confirmationCode: string;
+  confirmationToken: string;
+}): Promise<any> {
+  const confirmation = verifyCollectionConfirmation(input.confirmationToken);
+  if (confirmation.kind !== 'collection_update') {
+    throw new Error('This Shopify confirmation is not for a collection metadata update. Create a new preview.');
+  }
+  const { collection } = await getShopifyCollectionForWrite(input.collectionId);
+  const proposedInput = buildCollectionUpdateInput(input, collection);
+  const { shop } = getCredentials();
+  if (
+    confirmation.shop !== shop
+    || confirmation.collectionId !== input.collectionId
+    || confirmation.confirmationCode !== input.confirmationCode
+    || confirmation.proposedInputHash !== sha256(JSON.stringify(proposedInput))
+  ) {
+    throw new Error('Shopify confirmation does not match this collection update. Create a new preview.');
+  }
+  if (
+    collection.updatedAt !== confirmation.expectedUpdatedAt
+    || sha256(JSON.stringify(collectionState(collection))) !== confirmation.currentStateHash
+  ) {
+    throw new Error('The Shopify collection changed after the preview. Review it and create a new preview.');
+  }
+
+  const data = await shopifyGraphql<{
+    collectionUpdate: {
+      collection?: ShopifyCollection | null;
+      userErrors: Array<{ field?: string[] | null; message: string }>;
+    };
+  }>(`mutation ShopifyCollectionUpdate($collection: CollectionUpdateInput!) {
+    collectionUpdate(collection: $collection) {
+      collection {
+        id title handle descriptionHtml updatedAt sortOrder templateSuffix
+        productsCount { count }
+        seo { title description }
+        image { id altText url width height }
+        ruleSet { appliedDisjunctively rules { column relation condition } }
+      }
+      userErrors { field message }
+    }
+  }`, { collection: { id: input.collectionId, ...proposedInput } });
+  if (data.collectionUpdate.userErrors.length) {
+    throw new Error(`Shopify rejected the collection update: ${JSON.stringify(data.collectionUpdate.userErrors)}`);
+  }
+  if (!data.collectionUpdate.collection) throw new Error('Shopify did not return the updated collection.');
+
+  console.info(JSON.stringify({
+    event: 'shopify_collection_updated',
+    shop,
+    collectionId: input.collectionId,
+    changedFields: Object.keys(proposedInput),
+    updatedAt: data.collectionUpdate.collection.updatedAt,
+  }));
+  return {
+    applied: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop,
+    changedFields: Object.keys(proposedInput),
+    collection: data.collectionUpdate.collection,
+    recoverySnapshot: collectionState(collection),
+  };
+}
+
+async function getShopifyProductsByIds(productIds: string[]): Promise<any[]> {
+  const data = await shopifyGraphql<{ nodes: Array<any | null> }>(`query ShopifyProductsByIds($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Product { id title handle status updatedAt }
+    }
+  }`, { ids: productIds });
+  const products = data.nodes.filter((node): node is any => !!node?.id?.startsWith('gid://shopify/Product/'));
+  if (products.length !== productIds.length) {
+    const found = new Set(products.map(({ id }) => id));
+    throw new Error(`Shopify products not found: ${productIds.filter((id) => !found.has(id)).join(', ')}`);
+  }
+  return products;
+}
+
+export async function previewShopifyCollectionProductsUpdate(input: {
+  collectionId: string;
+  action: 'ADD' | 'REMOVE';
+  productIds: string[];
+}): Promise<any> {
+  const productIds = [...new Set(input.productIds)].sort();
+  const { collection, accessScopes } = await getShopifyCollectionForWrite(input.collectionId);
+  if (collection.ruleSet) {
+    throw new Error('Products in an automated Shopify collection are controlled by its rules and cannot be added or removed manually.');
+  }
+  const products = await getShopifyProductsByIds(productIds);
+  const confirmationCode = `SHOPIFY-${randomBytes(4).toString('hex').toUpperCase()}`;
+  const expiresAt = new Date(Date.now() + SHOPIFY_WRITE_CONFIRMATION_TTL_MS).toISOString();
+  const confirmation: ShopifyCollectionProductsConfirmation = {
+    version: 1,
+    kind: 'collection_products',
+    shop: getCredentials().shop,
+    collectionId: collection.id,
+    expectedUpdatedAt: collection.updatedAt,
+    action: input.action,
+    productIdsHash: sha256(JSON.stringify(productIds)),
+    confirmationCode,
+    expiresAt,
+  };
+  return {
+    dryRun: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    collection: {
+      id: collection.id,
+      title: collection.title,
+      handle: collection.handle,
+      productCount: collection.productsCount.count,
+      updatedAt: collection.updatedAt,
+    },
+    change: { action: input.action, products },
+    safety: {
+      accessScopes,
+      confirmationCode,
+      expiresAt,
+      instruction: `Show this preview to the user. Apply it only after the user explicitly replies with ${confirmationCode}.`,
+    },
+    confirmationToken: signCollectionConfirmation(confirmation),
+  };
+}
+
+export async function applyShopifyCollectionProductsUpdate(input: {
+  collectionId: string;
+  action: 'ADD' | 'REMOVE';
+  productIds: string[];
+  confirmationCode: string;
+  confirmationToken: string;
+}): Promise<any> {
+  const confirmation = verifyCollectionConfirmation(input.confirmationToken);
+  if (confirmation.kind !== 'collection_products') {
+    throw new Error('This Shopify confirmation is not for a collection product update. Create a new preview.');
+  }
+  const productIds = [...new Set(input.productIds)].sort();
+  const { collection } = await getShopifyCollectionForWrite(input.collectionId);
+  const { shop } = getCredentials();
+  if (collection.ruleSet) {
+    throw new Error('Products in an automated Shopify collection are controlled by its rules and cannot be added or removed manually.');
+  }
+  if (
+    confirmation.shop !== shop
+    || confirmation.collectionId !== input.collectionId
+    || confirmation.confirmationCode !== input.confirmationCode
+    || confirmation.action !== input.action
+    || confirmation.productIdsHash !== sha256(JSON.stringify(productIds))
+  ) {
+    throw new Error('Shopify confirmation does not match this collection product update. Create a new preview.');
+  }
+  if (collection.updatedAt !== confirmation.expectedUpdatedAt) {
+    throw new Error('The Shopify collection changed after the preview. Review it and create a new preview.');
+  }
+
+  const adding = input.action === 'ADD';
+  let mutationResult: {
+    collection?: { id: string; title: string; updatedAt: string; productsCount: { count: number } } | null;
+    job?: { id: string; done: boolean } | null;
+    userErrors: Array<{ field?: string[] | null; message: string }>;
+  };
+  if (adding) {
+    const data = await shopifyGraphql<{
+      collectionAddProducts: {
+        collection?: { id: string; title: string; updatedAt: string; productsCount: { count: number } } | null;
+        userErrors: Array<{ field?: string[] | null; message: string }>;
+      };
+    }>(`mutation ShopifyCollectionAddProducts($id: ID!, $productIds: [ID!]!) {
+      collectionAddProducts(id: $id, productIds: $productIds) {
+        collection { id title updatedAt productsCount { count } }
+        userErrors { field message }
+      }
+    }`, { id: input.collectionId, productIds });
+    mutationResult = data.collectionAddProducts;
+  } else {
+    const data = await shopifyGraphql<{
+      collectionRemoveProducts: {
+        job?: { id: string; done: boolean } | null;
+        userErrors: Array<{ field?: string[] | null; message: string }>;
+      };
+    }>(`mutation ShopifyCollectionRemoveProducts($id: ID!, $productIds: [ID!]!) {
+      collectionRemoveProducts(id: $id, productIds: $productIds) {
+        job { id done }
+        userErrors { field message }
+      }
+    }`, { id: input.collectionId, productIds });
+    mutationResult = data.collectionRemoveProducts;
+  }
+  if (mutationResult.userErrors.length) {
+    throw new Error(`Shopify rejected the collection product update: ${JSON.stringify(mutationResult.userErrors)}`);
+  }
+
+  console.info(JSON.stringify({
+    event: 'shopify_collection_products_updated',
+    shop,
+    collectionId: input.collectionId,
+    action: input.action,
+    productIds,
+  }));
+  return {
+    applied: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop,
+    collectionId: input.collectionId,
+    action: input.action,
+    productIds,
+    result: mutationResult,
   };
 }
 

@@ -20,13 +20,31 @@ import {
 } from './merchant-center.js';
 import { readStore } from './token-store.js';
 import {
+  applyShopifyCollectionProductsUpdate,
+  applyShopifyCollectionUpdate,
   applyShopifyProductDescriptionUpdate,
+  getShopifyCollection,
   getShopifySalesOverview,
   getShopifyShopOverview,
   listShopifyOrderDeliveryDetails,
+  listShopifyCollections,
   listShopifyProducts,
+  previewShopifyCollectionProductsUpdate,
+  previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
 } from './shopify.js';
+
+const SHOPIFY_COLLECTION_SORT_ORDERS = [
+  'ALPHA_ASC',
+  'ALPHA_DESC',
+  'BEST_SELLING',
+  'CREATED',
+  'CREATED_DESC',
+  'MANUAL',
+  'MOST_RELEVANT',
+  'PRICE_ASC',
+  'PRICE_DESC',
+] as const;
 
 function result(value: unknown) {
   return {
@@ -35,7 +53,7 @@ function result(value: unknown) {
 }
 
 export function createMarketingMcpServer(): McpServer {
-  const server = new McpServer({ name: 'marketing-mcp', version: '0.5.0' });
+  const server = new McpServer({ name: 'marketing-mcp', version: '0.6.0' });
 
   server.tool(
     'list_google_connections',
@@ -264,6 +282,84 @@ export function createMarketingMcpServer(): McpServer {
       pageToken: z.string().optional(),
     },
     async (input) => result(await listShopifyProducts(input)),
+  );
+
+  server.tool(
+    'list_shopify_collections',
+    'Lists manual and automated Shopify collections with product counts, rules, sort order, SEO, and pagination. Requires only read_products.',
+    {
+      query: z.string().max(1000).optional().describe('Optional Shopify collection search query, for example title:Sale.'),
+      limit: z.number().int().min(1).max(250).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await listShopifyCollections(input)),
+  );
+
+  server.tool(
+    'get_shopify_collection',
+    'Returns one Shopify collection, its rules and metadata, and a paginated list of its products. Requires only read_products.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+      productLimit: z.number().int().min(1).max(250).default(100),
+      productPageToken: z.string().optional(),
+    },
+    async (input) => result(await getShopifyCollection(input)),
+  );
+
+  server.tool(
+    'preview_shopify_collection_update',
+    'Creates a read-only preview for changing collection metadata. It never writes. Plain-text descriptions are converted to safe HTML. Use the returned confirmation code and token with apply_shopify_collection_update only after explicit user approval.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+      title: z.string().trim().min(1).max(255).optional(),
+      descriptionText: z.string().max(50000).optional(),
+      handle: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(255).optional(),
+      sortOrder: z.enum(SHOPIFY_COLLECTION_SORT_ORDERS).optional(),
+      seoTitle: z.string().max(255).optional(),
+      seoDescription: z.string().max(5000).optional(),
+    },
+    async (input) => result(await previewShopifyCollectionUpdate(input)),
+  );
+
+  server.tool(
+    'apply_shopify_collection_update',
+    'Applies exactly one previously previewed Shopify collection metadata update. Call only after showing the full preview and the user explicitly replies with its exact SHOPIFY confirmation code. Rejects expired, altered, or stale previews.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+      title: z.string().trim().min(1).max(255).optional(),
+      descriptionText: z.string().max(50000).optional(),
+      handle: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(255).optional(),
+      sortOrder: z.enum(SHOPIFY_COLLECTION_SORT_ORDERS).optional(),
+      seoTitle: z.string().max(255).optional(),
+      seoDescription: z.string().max(5000).optional(),
+      confirmationCode: z.string().regex(/^SHOPIFY-[A-F0-9]{8}$/),
+      confirmationToken: z.string().min(80).max(4000),
+    },
+    async (input) => result(await applyShopifyCollectionUpdate(input)),
+  );
+
+  server.tool(
+    'preview_shopify_collection_products_update',
+    'Creates a read-only preview for adding products to or removing products from one manual Shopify collection. Automated collection membership must be changed through rules. It never writes.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+      action: z.enum(['ADD', 'REMOVE']),
+      productIds: z.array(z.string().regex(/^gid:\/\/shopify\/Product\/\d+$/)).min(1).max(50),
+    },
+    async (input) => result(await previewShopifyCollectionProductsUpdate(input)),
+  );
+
+  server.tool(
+    'apply_shopify_collection_products_update',
+    'Applies exactly one previewed add/remove operation for up to 50 products in a manual Shopify collection. Call only after the user explicitly replies with the preview exact SHOPIFY confirmation code.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+      action: z.enum(['ADD', 'REMOVE']),
+      productIds: z.array(z.string().regex(/^gid:\/\/shopify\/Product\/\d+$/)).min(1).max(50),
+      confirmationCode: z.string().regex(/^SHOPIFY-[A-F0-9]{8}$/),
+      confirmationToken: z.string().min(80).max(4000),
+    },
+    async (input) => result(await applyShopifyCollectionProductsUpdate(input)),
   );
 
   server.tool(
