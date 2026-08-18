@@ -19,6 +19,7 @@ import {
   runMerchantCenterQuery,
 } from './merchant-center.js';
 import { readStore } from './token-store.js';
+import { MARKETING_MCP_VERSION } from './version.js';
 import {
   applyShopifyCollectionProductsUpdate,
   applyShopifyCollectionUpdate,
@@ -53,7 +54,7 @@ function result(value: unknown) {
 }
 
 export function createMarketingMcpServer(): McpServer {
-  const server = new McpServer({ name: 'marketing-mcp', version: '0.6.0' });
+  const server = new McpServer({ name: 'marketing-mcp', version: MARKETING_MCP_VERSION });
 
   server.tool(
     'list_google_connections',
