@@ -10,7 +10,7 @@ Configure these app scopes:
 
 - `read_orders`
 - `read_products`
-- `write_products` for the guarded product-description update flow
+- `write_products` for guarded product-description and collection update flows
 - `read_all_orders` when historical order analysis beyond 60 days is needed and
   Shopify has granted access
 
@@ -69,6 +69,17 @@ curl -fsS http://127.0.0.1:8000/health
   API version, and the scopes actually granted to the installed app.
 - `list_shopify_products`: lists products and the first 20 variants per product,
   with product pagination.
+- `list_shopify_collections`: lists manual and automated collections with product
+  counts, rules, sort order, SEO metadata, images, and pagination.
+- `get_shopify_collection`: returns one collection plus a paginated list of its
+  products.
+- `preview_shopify_collection_update` and `apply_shopify_collection_update`:
+  preview and then update collection title, safe plain-text description, handle,
+  sort order, or SEO fields with an exact short-lived confirmation code.
+- `preview_shopify_collection_products_update` and
+  `apply_shopify_collection_products_update`: preview and then add or remove up
+  to 50 products in one manual collection. Automated collection membership stays
+  controlled by collection rules.
 - `get_shopify_sales_overview`: aggregates order count, current net revenue,
   subtotal, AOV, financial and fulfillment statuses, and UTC daily totals.
 - `list_shopify_order_delivery_details`: returns per-order destination country,
@@ -81,16 +92,15 @@ curl -fsS http://127.0.0.1:8000/health
   token, product ID, and exact confirmation code from a preview that is at most
   ten minutes old. It aborts if the product changed after preview creation.
 
-The write path accepts plain text rather than arbitrary HTML. It escapes HTML
-characters, converts blank lines to paragraphs, and converts single line breaks
-to `<br>`. Its Shopify mutation contains only `id` and `descriptionHtml`; it
-cannot change price, inventory, title, tags, SEO, status, publishing, or theme
-data. The apply tool must not be called until the full preview has been shown and
-the user has explicitly replied with the exact confirmation code. Audit logs
-contain product and description hashes, never the description text or token. A
-successful result returns the previous description as a recovery snapshot. Since
-the guarded write tool accepts plain text only, rich HTML must be restored
-manually in Shopify Admin if an exact rollback is required.
+Description write paths accept plain text rather than arbitrary HTML. They escape
+HTML characters, convert blank lines to paragraphs, and convert single line breaks
+to `<br>`. Apply tools must not be called until the full preview has been shown and
+the user has explicitly replied with the exact confirmation code. Tokens expire
+after ten minutes and are bound to the shop, resource, proposed values, and the
+resource version read during preview. Collection product operations are limited to
+manual collections and one add or remove action per preview. Audit logs never
+contain confirmation tokens or description text. Successful metadata updates
+return the previous values as a recovery snapshot.
 
 The sales tool excludes test and cancelled orders by default, processes up to
 1,000 orders by default, and reports when the configured cap truncates a result.
@@ -112,3 +122,7 @@ when Shopify has not received the corresponding tracking event.
    Produkt- und Versandkosten sowie die Dauer bis Versand und Zustellung.`
 5. `Erstelle nur eine Vorschau für eine neue Beschreibung von Produkt <ID>.`
 6. After reviewing the preview, confirm with the exact code shown by the tool.
+7. `Liste alle Shopify-Collections mit Typ, Produktanzahl und Regeln auf.`
+8. `Zeige die Produkte und Regeln der Collection <ID>.`
+9. `Erstelle nur eine Vorschau, um Produkt <PRODUCT_ID> zur manuellen Collection
+   <COLLECTION_ID> hinzuzufügen.`
