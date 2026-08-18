@@ -11,6 +11,13 @@ Configure these app scopes:
 - `read_orders`
 - `read_products`
 - `write_products` for guarded product-description and collection update flows
+- `read_product_listings` for detailed product publication data
+- `read_publications` and `write_publications` for guarded collection publication
+  previews and updates
+- `read_metaobject_definitions` and `read_metaobjects` for structured drop,
+  design-family, and related-product data
+- `write_metaobject_definitions` and `write_metaobjects` are reserved for the
+  later schema rollout; the current MCP release exposes no Metaobject write tool
 - `read_all_orders` when historical order analysis beyond 60 days is needed and
   Shopify has granted access
 
@@ -34,8 +41,8 @@ updating the app.
 2. Go to **Apps**, select **Create app**, then **Start from Dev Dashboard**.
 3. Name the app `Marketing Data Hub`.
 4. Create a version. The app is API-only, so it can use Shopify's default app URL.
-5. Select GraphQL Admin API scopes `read_orders`, `read_products`, and
-   `write_products`, then release the version.
+5. Select the GraphQL Admin API scopes listed under **Data and privacy scope**,
+   then release the version.
 6. From the app home, select **Install app**, choose the production store, review
    the permissions, and install or update it.
 7. Open the app's **Settings** page and copy the Client ID and Client secret.
@@ -73,6 +80,18 @@ curl -fsS http://127.0.0.1:8000/health
   counts, rules, sort order, SEO metadata, images, and pagination.
 - `get_shopify_collection`: returns one collection plus a paginated list of its
   products.
+- `list_shopify_publications`: lists sales channels and their automatic and
+  scheduled publication capabilities.
+- `get_shopify_collection_publication_status`: shows where one collection is
+  currently published or scheduled.
+- `preview_shopify_collection_publication_update` and
+  `apply_shopify_collection_publication_update`: preview and then publish,
+  schedule, or unpublish one collection on selected sales channels with an exact
+  short-lived confirmation code.
+- `list_shopify_metaobject_definitions`: lists structured-content definitions,
+  fields, validations, access, and capabilities.
+- `list_shopify_metaobjects` and `get_shopify_metaobject`: read structured entries
+  and their raw field values. No Metaobject write path is exposed yet.
 - `preview_shopify_collection_update` and `apply_shopify_collection_update`:
   preview and then update collection title, safe plain-text description, handle,
   sort order, or SEO fields with an exact short-lived confirmation code.
@@ -98,9 +117,10 @@ to `<br>`. Apply tools must not be called until the full preview has been shown 
 the user has explicitly replied with the exact confirmation code. Tokens expire
 after ten minutes and are bound to the shop, resource, proposed values, and the
 resource version read during preview. Collection product operations are limited to
-manual collections and one add or remove action per preview. Audit logs never
-contain confirmation tokens or description text. Successful metadata updates
-return the previous values as a recovery snapshot.
+manual collections and one add or remove action per preview. Collection publication
+updates are bound to the exact selected sales channels and the publication state
+read during preview. Audit logs never contain confirmation tokens or description
+text. Successful metadata updates return the previous values as a recovery snapshot.
 
 The sales tool excludes test and cancelled orders by default, processes up to
 1,000 orders by default, and reports when the configured cap truncates a result.
@@ -126,3 +146,6 @@ when Shopify has not received the corresponding tracking event.
 8. `Zeige die Produkte und Regeln der Collection <ID>.`
 9. `Erstelle nur eine Vorschau, um Produkt <PRODUCT_ID> zur manuellen Collection
    <COLLECTION_ID> hinzuzufügen.`
+10. `Liste alle Shopify-Verkaufskanäle und ihren Veröffentlichungsmodus auf.`
+11. `Zeige, auf welchen Verkaufskanälen Collection <ID> veröffentlicht ist.`
+12. `Liste alle Metaobject-Definitionen auf.`

@@ -22,15 +22,22 @@ import { readStore } from './token-store.js';
 import { MARKETING_MCP_VERSION } from './version.js';
 import {
   applyShopifyCollectionProductsUpdate,
+  applyShopifyCollectionPublicationUpdate,
   applyShopifyCollectionUpdate,
   applyShopifyProductDescriptionUpdate,
   getShopifyCollection,
+  getShopifyCollectionPublicationStatus,
+  getShopifyMetaobject,
   getShopifySalesOverview,
   getShopifyShopOverview,
   listShopifyOrderDeliveryDetails,
   listShopifyCollections,
+  listShopifyMetaobjectDefinitions,
+  listShopifyMetaobjects,
+  listShopifyPublications,
   listShopifyProducts,
   previewShopifyCollectionProductsUpdate,
+  previewShopifyCollectionPublicationUpdate,
   previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
 } from './shopify.js';
@@ -305,6 +312,82 @@ export function createMarketingMcpServer(): McpServer {
       productPageToken: z.string().optional(),
     },
     async (input) => result(await getShopifyCollection(input)),
+  );
+
+  server.tool(
+    'list_shopify_publications',
+    'Lists Shopify publications (sales channels) and whether they support automatic or scheduled publishing.',
+    {
+      limit: z.number().int().min(1).max(250).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await listShopifyPublications(input)),
+  );
+
+  server.tool(
+    'get_shopify_collection_publication_status',
+    'Returns the current and scheduled publication state of one Shopify collection across sales channels.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+    },
+    async (input) => result(await getShopifyCollectionPublicationStatus(input)),
+  );
+
+  server.tool(
+    'preview_shopify_collection_publication_update',
+    'Creates a read-only preview for publishing, scheduling, or unpublishing one collection on selected Shopify publications. It never writes.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+      action: z.enum(['PUBLISH', 'UNPUBLISH']),
+      publicationIds: z.array(z.string().regex(/^gid:\/\/shopify\/Publication\/\d+$/)).min(1).max(20),
+      publishDate: z.string().datetime({ offset: true }).optional(),
+    },
+    async (input) => result(await previewShopifyCollectionPublicationUpdate(input)),
+  );
+
+  server.tool(
+    'apply_shopify_collection_publication_update',
+    'Applies exactly one previewed collection publish, scheduled publish, or unpublish action. Call only after the user explicitly replies with the exact SHOPIFY confirmation code.',
+    {
+      collectionId: z.string().regex(/^gid:\/\/shopify\/Collection\/\d+$/),
+      action: z.enum(['PUBLISH', 'UNPUBLISH']),
+      publicationIds: z.array(z.string().regex(/^gid:\/\/shopify\/Publication\/\d+$/)).min(1).max(20),
+      publishDate: z.string().datetime({ offset: true }).optional(),
+      confirmationCode: z.string().regex(/^SHOPIFY-[A-F0-9]{8}$/),
+      confirmationToken: z.string().min(80).max(4000),
+    },
+    async (input) => result(await applyShopifyCollectionPublicationUpdate(input)),
+  );
+
+  server.tool(
+    'list_shopify_metaobject_definitions',
+    'Lists Shopify metaobject definitions, fields, validation rules, access, and capabilities. Read-only.',
+    {
+      limit: z.number().int().min(1).max(250).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await listShopifyMetaobjectDefinitions(input)),
+  );
+
+  server.tool(
+    'list_shopify_metaobjects',
+    'Lists Shopify metaobject entries for one definition type, including raw structured field values. Read-only.',
+    {
+      type: z.string().regex(/^[a-zA-Z0-9_$-]+$/).max(255),
+      query: z.string().max(1000).optional(),
+      limit: z.number().int().min(1).max(250).default(100),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await listShopifyMetaobjects(input)),
+  );
+
+  server.tool(
+    'get_shopify_metaobject',
+    'Returns one Shopify metaobject entry with all raw structured field values. Read-only.',
+    {
+      metaobjectId: z.string().regex(/^gid:\/\/shopify\/Metaobject\/\d+$/),
+    },
+    async (input) => result(await getShopifyMetaobject(input)),
   );
 
   server.tool(

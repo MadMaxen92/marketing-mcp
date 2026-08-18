@@ -86,6 +86,27 @@ type ShopifyCollectionProductsConfirmation = {
   expiresAt: string;
 };
 
+type ShopifyCollectionPublicationConfirmation = {
+  version: 1;
+  kind: 'collection_publications';
+  shop: string;
+  collectionId: string;
+  expectedUpdatedAt: string;
+  action: 'PUBLISH' | 'UNPUBLISH';
+  publicationIdsHash: string;
+  currentStateHash: string;
+  publishDate?: string;
+  confirmationCode: string;
+  expiresAt: string;
+};
+
+type ShopifyPublication = {
+  id: string;
+  name: string;
+  autoPublish: boolean;
+  supportsFuturePublishing: boolean;
+};
+
 type Money = {
   amount: string;
   currencyCode: string;
@@ -308,7 +329,9 @@ function verifyConfirmation(token: string): ShopifyProductDescriptionConfirmatio
 }
 
 function signCollectionConfirmation(
-  payload: ShopifyCollectionUpdateConfirmation | ShopifyCollectionProductsConfirmation,
+  payload: ShopifyCollectionUpdateConfirmation
+    | ShopifyCollectionProductsConfirmation
+    | ShopifyCollectionPublicationConfirmation,
 ): string {
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const signature = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest('base64url');
@@ -317,7 +340,9 @@ function signCollectionConfirmation(
 
 function verifyCollectionConfirmation(
   token: string,
-): ShopifyCollectionUpdateConfirmation | ShopifyCollectionProductsConfirmation {
+): ShopifyCollectionUpdateConfirmation
+  | ShopifyCollectionProductsConfirmation
+  | ShopifyCollectionPublicationConfirmation {
   const [encoded, signature, extra] = token.split('.');
   if (!encoded || !signature || extra) throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
   const expected = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest();
@@ -331,7 +356,9 @@ function verifyCollectionConfirmation(
     throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
   }
 
-  let payload: ShopifyCollectionUpdateConfirmation | ShopifyCollectionProductsConfirmation;
+  let payload: ShopifyCollectionUpdateConfirmation
+    | ShopifyCollectionProductsConfirmation
+    | ShopifyCollectionPublicationConfirmation;
   try {
     payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
   } catch {
@@ -348,8 +375,13 @@ function verifyCollectionConfirmation(
     ? /^[a-f0-9]{64}$/.test(payload.currentStateHash)
       && /^[a-f0-9]{64}$/.test(payload.proposedInputHash)
     : payload.kind === 'collection_products'
-      && (payload.action === 'ADD' || payload.action === 'REMOVE')
-      && /^[a-f0-9]{64}$/.test(payload.productIdsHash);
+      ? (payload.action === 'ADD' || payload.action === 'REMOVE')
+        && /^[a-f0-9]{64}$/.test(payload.productIdsHash)
+      : payload.kind === 'collection_publications'
+        && (payload.action === 'PUBLISH' || payload.action === 'UNPUBLISH')
+        && /^[a-f0-9]{64}$/.test(payload.publicationIdsHash)
+        && /^[a-f0-9]{64}$/.test(payload.currentStateHash)
+        && (payload.publishDate === undefined || Number.isFinite(Date.parse(payload.publishDate)));
   if (!commonValid || !kindValid) {
     throw new Error('Invalid Shopify collection confirmation token. Create a new preview.');
   }
@@ -752,6 +784,351 @@ export async function listShopifyCollections(input: {
       collectionType: collection.ruleSet ? 'AUTOMATED' : 'MANUAL',
     })),
     nextPageToken: data.collections.pageInfo.hasNextPage ? data.collections.pageInfo.endCursor : undefined,
+  };
+}
+
+export async function listShopifyPublications(input: {
+  limit?: number;
+  pageToken?: string;
+}): Promise<any> {
+  const first = Math.min(Math.max(input.limit ?? 100, 1), 250);
+  const data = await shopifyGraphql<{
+    publications: {
+      nodes: ShopifyPublication[];
+      pageInfo: { hasNextPage: boolean; endCursor?: string };
+    };
+  }>(`query ShopifyPublications($first: Int!, $after: String) {
+    publications(first: $first, after: $after) {
+      nodes { id name autoPublish supportsFuturePublishing }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`, { first, after: input.pageToken });
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    publications: data.publications.nodes,
+    nextPageToken: data.publications.pageInfo.hasNextPage
+      ? data.publications.pageInfo.endCursor
+      : undefined,
+  };
+}
+
+async function getShopifyCollectionPublicationState(collectionId: string): Promise<{
+  collection: { id: string; title: string; handle: string; updatedAt: string };
+  resourcePublications: Array<{
+    isPublished: boolean;
+    publishDate?: string | null;
+    publication: ShopifyPublication;
+  }>;
+  accessScopes: string[];
+}> {
+  const data = await shopifyGraphql<{
+    node?: {
+      id: string;
+      title: string;
+      handle: string;
+      updatedAt: string;
+      resourcePublicationsV2: {
+        nodes: Array<{
+          isPublished: boolean;
+          publishDate?: string | null;
+          publication: ShopifyPublication;
+        }>;
+        pageInfo: { hasNextPage: boolean };
+      };
+    } | null;
+    currentAppInstallation: { accessScopes: Array<{ handle: string }> };
+  }>(`query ShopifyCollectionPublicationState($id: ID!) {
+    node(id: $id) {
+      ... on Collection {
+        id title handle updatedAt
+        resourcePublicationsV2(first: 100, onlyPublished: false) {
+          nodes {
+            isPublished
+            publishDate
+            publication { id name autoPublish supportsFuturePublishing }
+          }
+          pageInfo { hasNextPage }
+        }
+      }
+    }
+    currentAppInstallation { accessScopes { handle } }
+  }`, { id: collectionId });
+  if (!data.node?.id?.startsWith('gid://shopify/Collection/')) {
+    throw new Error(`Shopify collection not found: ${collectionId}`);
+  }
+  if (data.node.resourcePublicationsV2.pageInfo.hasNextPage) {
+    throw new Error('Shopify returned more than 100 publication states for this collection. Narrow the integration before writing.');
+  }
+  return {
+    collection: data.node,
+    resourcePublications: data.node.resourcePublicationsV2.nodes,
+    accessScopes: data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort(),
+  };
+}
+
+export async function getShopifyCollectionPublicationStatus(input: {
+  collectionId: string;
+}): Promise<any> {
+  const state = await getShopifyCollectionPublicationState(input.collectionId);
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    collection: state.collection,
+    publications: state.resourcePublications,
+    accessScopes: state.accessScopes.filter((scope) => scope.includes('publication')),
+  };
+}
+
+async function getShopifyPublicationsByIds(publicationIds: string[]): Promise<ShopifyPublication[]> {
+  const data = await shopifyGraphql<{ nodes: Array<ShopifyPublication | null> }>(`query ShopifyPublicationsByIds($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Publication { id name autoPublish supportsFuturePublishing }
+    }
+  }`, { ids: publicationIds });
+  const publications = data.nodes.filter(
+    (node): node is ShopifyPublication => !!node?.id?.startsWith('gid://shopify/Publication/'),
+  );
+  if (publications.length !== publicationIds.length) {
+    const found = new Set(publications.map(({ id }) => id));
+    throw new Error(`Shopify publications not found: ${publicationIds.filter((id) => !found.has(id)).join(', ')}`);
+  }
+  return publications;
+}
+
+function selectedPublicationState(
+  publicationIds: string[],
+  resourcePublications: Array<{
+    isPublished: boolean;
+    publishDate?: string | null;
+    publication: ShopifyPublication;
+  }>,
+): Array<{ publicationId: string; isPublished: boolean; publishDate?: string | null }> {
+  const byId = new Map(resourcePublications.map((item) => [item.publication.id, item]));
+  return publicationIds.map((publicationId) => ({
+    publicationId,
+    isPublished: byId.get(publicationId)?.isPublished ?? false,
+    publishDate: byId.get(publicationId)?.publishDate,
+  }));
+}
+
+export async function previewShopifyCollectionPublicationUpdate(input: {
+  collectionId: string;
+  action: 'PUBLISH' | 'UNPUBLISH';
+  publicationIds: string[];
+  publishDate?: string;
+}): Promise<any> {
+  if (input.action === 'UNPUBLISH' && input.publishDate !== undefined) {
+    throw new Error('publishDate can only be used with the PUBLISH action.');
+  }
+  const publicationIds = [...new Set(input.publicationIds)].sort();
+  const publishDate = input.publishDate === undefined ? undefined : new Date(input.publishDate).toISOString();
+  const state = await getShopifyCollectionPublicationState(input.collectionId);
+  if (!state.accessScopes.includes('write_publications')) {
+    throw new Error('Shopify write_publications is not granted to the installed app.');
+  }
+  const publications = await getShopifyPublicationsByIds(publicationIds);
+  if (publishDate && Date.parse(publishDate) > Date.now()) {
+    const unsupported = publications.filter(({ supportsFuturePublishing }) => !supportsFuturePublishing);
+    if (unsupported.length) {
+      throw new Error(`Scheduled publishing is not supported by: ${unsupported.map(({ name }) => name).join(', ')}`);
+    }
+  }
+  const currentState = selectedPublicationState(publicationIds, state.resourcePublications);
+  const confirmationCode = `SHOPIFY-${randomBytes(4).toString('hex').toUpperCase()}`;
+  const expiresAt = new Date(Date.now() + SHOPIFY_WRITE_CONFIRMATION_TTL_MS).toISOString();
+  const confirmation: ShopifyCollectionPublicationConfirmation = {
+    version: 1,
+    kind: 'collection_publications',
+    shop: getCredentials().shop,
+    collectionId: input.collectionId,
+    expectedUpdatedAt: state.collection.updatedAt,
+    action: input.action,
+    publicationIdsHash: sha256(JSON.stringify(publicationIds)),
+    currentStateHash: sha256(JSON.stringify(currentState)),
+    publishDate,
+    confirmationCode,
+    expiresAt,
+  };
+  return {
+    dryRun: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    collection: state.collection,
+    change: { action: input.action, publishDate, publications, currentState },
+    safety: {
+      accessScopes: state.accessScopes.filter((scope) => scope.includes('publication')),
+      confirmationCode,
+      expiresAt,
+      instruction: `Show this preview to the user. Apply it only after the user explicitly replies with ${confirmationCode}.`,
+    },
+    confirmationToken: signCollectionConfirmation(confirmation),
+  };
+}
+
+export async function applyShopifyCollectionPublicationUpdate(input: {
+  collectionId: string;
+  action: 'PUBLISH' | 'UNPUBLISH';
+  publicationIds: string[];
+  publishDate?: string;
+  confirmationCode: string;
+  confirmationToken: string;
+}): Promise<any> {
+  const confirmation = verifyCollectionConfirmation(input.confirmationToken);
+  if (confirmation.kind !== 'collection_publications') {
+    throw new Error('This Shopify confirmation is not for a collection publication update. Create a new preview.');
+  }
+  if (input.action === 'UNPUBLISH' && input.publishDate !== undefined) {
+    throw new Error('publishDate can only be used with the PUBLISH action.');
+  }
+  const publicationIds = [...new Set(input.publicationIds)].sort();
+  const publishDate = input.publishDate === undefined ? undefined : new Date(input.publishDate).toISOString();
+  const state = await getShopifyCollectionPublicationState(input.collectionId);
+  const currentState = selectedPublicationState(publicationIds, state.resourcePublications);
+  const { shop } = getCredentials();
+  if (
+    confirmation.shop !== shop
+    || confirmation.collectionId !== input.collectionId
+    || confirmation.confirmationCode !== input.confirmationCode
+    || confirmation.action !== input.action
+    || confirmation.publicationIdsHash !== sha256(JSON.stringify(publicationIds))
+    || confirmation.publishDate !== publishDate
+  ) {
+    throw new Error('Shopify confirmation does not match this collection publication update. Create a new preview.');
+  }
+  if (confirmation.currentStateHash !== sha256(JSON.stringify(currentState))) {
+    throw new Error('The Shopify collection publication state changed after the preview. Review it and create a new preview.');
+  }
+
+  const publicationInput = publicationIds.map((publicationId) => ({ publicationId, publishDate }));
+  const mutationName = input.action === 'PUBLISH' ? 'publishablePublish' : 'publishableUnpublish';
+  const mutation = input.action === 'PUBLISH'
+    ? `mutation ShopifyCollectionPublish($id: ID!, $input: [PublicationInput!]!) {
+        publishablePublish(id: $id, input: $input) {
+          publishable { resourcePublicationsV2(first: 100, onlyPublished: false) { nodes { isPublished publishDate publication { id name } } } }
+          userErrors { field message }
+        }
+      }`
+    : `mutation ShopifyCollectionUnpublish($id: ID!, $input: [PublicationInput!]!) {
+        publishableUnpublish(id: $id, input: $input) {
+          publishable { resourcePublicationsV2(first: 100, onlyPublished: false) { nodes { isPublished publishDate publication { id name } } } }
+          userErrors { field message }
+        }
+      }`;
+  const data = await shopifyGraphql<Record<string, {
+    publishable?: any;
+    userErrors: Array<{ field?: string[] | null; message: string }>;
+  }>>(mutation, { id: input.collectionId, input: publicationInput });
+  const result = data[mutationName];
+  if (!result) throw new Error(`Shopify did not return ${mutationName}.`);
+  if (result.userErrors.length) {
+    throw new Error(`Shopify rejected the collection publication update: ${JSON.stringify(result.userErrors)}`);
+  }
+  console.info(JSON.stringify({
+    event: 'shopify_collection_publications_updated',
+    shop,
+    collectionId: input.collectionId,
+    action: input.action,
+    publicationIds,
+    publishDate,
+  }));
+  return {
+    applied: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop,
+    collectionId: input.collectionId,
+    action: input.action,
+    publicationIds,
+    publishDate,
+    publicationState: result.publishable?.resourcePublicationsV2?.nodes ?? [],
+  };
+}
+
+export async function listShopifyMetaobjectDefinitions(input: {
+  limit?: number;
+  pageToken?: string;
+}): Promise<any> {
+  const first = Math.min(Math.max(input.limit ?? 100, 1), 250);
+  const data = await shopifyGraphql<{
+    metaobjectDefinitions: {
+      nodes: any[];
+      pageInfo: { hasNextPage: boolean; endCursor?: string };
+    };
+  }>(`query ShopifyMetaobjectDefinitions($first: Int!, $after: String) {
+    metaobjectDefinitions(first: $first, after: $after) {
+      nodes {
+        id name type description displayNameKey
+        fieldDefinitions {
+          key name description required
+          type { name }
+          validations { name value }
+        }
+        access { admin storefront }
+        capabilities { publishable { enabled } translatable { enabled } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`, { first, after: input.pageToken });
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    definitions: data.metaobjectDefinitions.nodes,
+    nextPageToken: data.metaobjectDefinitions.pageInfo.hasNextPage
+      ? data.metaobjectDefinitions.pageInfo.endCursor
+      : undefined,
+  };
+}
+
+export async function listShopifyMetaobjects(input: {
+  type: string;
+  query?: string;
+  limit?: number;
+  pageToken?: string;
+}): Promise<any> {
+  const first = Math.min(Math.max(input.limit ?? 100, 1), 250);
+  const data = await shopifyGraphql<{
+    metaobjects: {
+      nodes: any[];
+      pageInfo: { hasNextPage: boolean; endCursor?: string };
+    };
+  }>(`query ShopifyMetaobjects($type: String!, $first: Int!, $after: String, $query: String) {
+    metaobjects(type: $type, first: $first, after: $after, query: $query, sortKey: "updated_at", reverse: true) {
+      nodes {
+        id type handle displayName updatedAt
+        fields { key type value }
+        capabilities { publishable { status } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`, { type: input.type, first, after: input.pageToken, query: input.query });
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    type: input.type,
+    metaobjects: data.metaobjects.nodes,
+    nextPageToken: data.metaobjects.pageInfo.hasNextPage
+      ? data.metaobjects.pageInfo.endCursor
+      : undefined,
+  };
+}
+
+export async function getShopifyMetaobject(input: { metaobjectId: string }): Promise<any> {
+  const data = await shopifyGraphql<{ node?: any | null }>(`query ShopifyMetaobject($id: ID!) {
+    node(id: $id) {
+      ... on Metaobject {
+        id type handle displayName updatedAt
+        fields { key type value }
+        capabilities { publishable { status } }
+      }
+    }
+  }`, { id: input.metaobjectId });
+  if (!data.node?.id?.startsWith('gid://shopify/Metaobject/')) {
+    throw new Error(`Shopify metaobject not found: ${input.metaobjectId}`);
+  }
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    metaobject: data.node,
   };
 }
 
