@@ -17,10 +17,11 @@ eligibility, product performance, price insights, and advanced read-only MCQL
 queries. See [docs/MERCHANT_CENTER.md](docs/MERCHANT_CENTER.md) for setup and usage.
 
 Shopify uses a merchant-owned Dev Dashboard app with short-lived client-credentials
-tokens. Products and collections can be read with `read_products`. Product
-descriptions, collection metadata, and manual collection membership can be changed
-only through a preview plus an exact, short-lived confirmation code; prices,
-inventory, publication state, automated collection rules, and themes remain
+tokens. Products, collections, sales channels, publication state, and metaobjects
+can be read with narrowly scoped Shopify permissions. Product descriptions,
+collection metadata, manual collection membership, and collection publication
+state can be changed only through a preview plus an exact, short-lived confirmation
+code. Prices, inventory, automated collection rules, themes, and metaobjects remain
 read-only. See [docs/SHOPIFY.md](docs/SHOPIFY.md).
 
 > Never commit `.env` files, OAuth client secrets, refresh tokens, or private keys.

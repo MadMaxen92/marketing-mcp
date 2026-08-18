@@ -21,12 +21,17 @@ Object.assign(process.env, {
 
 const {
   applyShopifyCollectionProductsUpdate,
+  applyShopifyCollectionPublicationUpdate,
   applyShopifyCollectionUpdate,
   applyShopifyProductDescriptionUpdate,
   buildShopifyOrdersSearchQuery,
   getShopifyShopOverview,
   listShopifyCollections,
+  listShopifyMetaobjectDefinitions,
+  listShopifyMetaobjects,
+  listShopifyPublications,
   previewShopifyCollectionProductsUpdate,
+  previewShopifyCollectionPublicationUpdate,
   previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
   shopifyDescriptionTextToHtml,
@@ -470,4 +475,130 @@ test('lists Shopify collections and guards metadata and manual product membershi
   assert.deepEqual(membershipApplied.productIds, [productId]);
   assert.equal(requests.filter(({ query }) => query.includes('mutation ShopifyCollectionUpdate')).length, 1);
   assert.equal(requests.filter(({ query }) => query.includes('mutation ShopifyCollectionAddProducts')).length, 1);
+});
+
+test('reads publications and metaobjects and guards collection unpublishing', async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  context.mock.method(console, 'info', () => undefined);
+
+  const collectionId = 'gid://shopify/Collection/456';
+  const publicationId = 'gid://shopify/Publication/321';
+  const publication = {
+    id: publicationId,
+    name: 'Online Store',
+    autoPublish: false,
+    supportsFuturePublishing: true,
+  };
+  const collection = {
+    id: collectionId,
+    title: 'Sale',
+    handle: 'sale',
+    updatedAt: '2026-08-18T08:00:00Z',
+    resourcePublicationsV2: {
+      nodes: [{ isPublished: true, publishDate: '2026-08-01T08:00:00Z', publication }],
+      pageInfo: { hasNextPage: false },
+    },
+  };
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      query: string;
+      variables: Record<string, any>;
+    };
+    if (request.query.includes('query ShopifyPublications(')) {
+      return new Response(JSON.stringify({
+        data: { publications: { nodes: [publication], pageInfo: { hasNextPage: false } } },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyCollectionPublicationState')) {
+      return new Response(JSON.stringify({
+        data: {
+          node: collection,
+          currentAppInstallation: {
+            accessScopes: [{ handle: 'read_publications' }, { handle: 'write_publications' }],
+          },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyPublicationsByIds')) {
+      return new Response(JSON.stringify({ data: { nodes: [publication] } }), { status: 200 });
+    }
+    if (request.query.includes('mutation ShopifyCollectionUnpublish')) {
+      assert.deepEqual(request.variables, {
+        id: collectionId,
+        input: [{ publicationId }],
+      });
+      return new Response(JSON.stringify({
+        data: {
+          publishableUnpublish: {
+            publishable: { resourcePublicationsV2: { nodes: [] } },
+            userErrors: [],
+          },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyMetaobjectDefinitions')) {
+      return new Response(JSON.stringify({
+        data: {
+          metaobjectDefinitions: {
+            nodes: [{
+              id: 'gid://shopify/MetaobjectDefinition/1',
+              name: 'Drop',
+              type: 'drop',
+              fieldDefinitions: [{ key: 'name', name: 'Name', required: true, type: { name: 'single_line_text_field' }, validations: [] }],
+              access: { admin: 'MERCHANT_READ_WRITE', storefront: 'PUBLIC_READ' },
+              capabilities: { publishable: { enabled: true }, translatable: { enabled: false } },
+            }],
+            pageInfo: { hasNextPage: false },
+          },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyMetaobjects(')) {
+      return new Response(JSON.stringify({
+        data: {
+          metaobjects: {
+            nodes: [{
+              id: 'gid://shopify/Metaobject/1',
+              type: 'drop',
+              handle: 'summer-2026',
+              displayName: 'Summer 2026',
+              updatedAt: '2026-08-18T08:00:00Z',
+              fields: [{ key: 'name', type: 'single_line_text_field', value: 'Summer 2026' }],
+              capabilities: { publishable: { status: 'ACTIVE' } },
+            }],
+            pageInfo: { hasNextPage: false },
+          },
+        },
+      }), { status: 200 });
+    }
+    throw new Error(`Unexpected Shopify test query: ${request.query}`);
+  };
+
+  const publications = await listShopifyPublications({ limit: 100 });
+  assert.equal(publications.publications[0].name, 'Online Store');
+
+  const preview = await previewShopifyCollectionPublicationUpdate({
+    collectionId,
+    action: 'UNPUBLISH',
+    publicationIds: [publicationId],
+  });
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.change.currentState[0].isPublished, true);
+  const applied = await applyShopifyCollectionPublicationUpdate({
+    collectionId,
+    action: 'UNPUBLISH',
+    publicationIds: [publicationId],
+    confirmationCode: preview.safety.confirmationCode,
+    confirmationToken: preview.confirmationToken,
+  });
+  assert.equal(applied.applied, true);
+  assert.equal(applied.action, 'UNPUBLISH');
+
+  const definitions = await listShopifyMetaobjectDefinitions({ limit: 100 });
+  assert.equal(definitions.definitions[0].type, 'drop');
+  const metaobjects = await listShopifyMetaobjects({ type: 'drop', limit: 100 });
+  assert.equal(metaobjects.metaobjects[0].handle, 'summer-2026');
 });
