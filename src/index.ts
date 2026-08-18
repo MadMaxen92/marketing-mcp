@@ -11,6 +11,7 @@ import {
   requireMcpOAuth,
   showAuthorizationPage,
 } from './oauth.js';
+import { MARKETING_MCP_VERSION } from './version.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -19,7 +20,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'marketing-mcp', version: '0.5.0' });
+  res.json({ status: 'ok', service: 'marketing-mcp', version: MARKETING_MCP_VERSION });
 });
 
 app.get('/connect/google', beginGoogleOAuth);
