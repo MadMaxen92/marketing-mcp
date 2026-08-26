@@ -6,7 +6,7 @@
 - DNS records for `marketing.klubnavi.de`
 - Nginx on the host
 - Google OAuth web client
-- Google Analytics Data API and Google Analytics Admin API enabled
+- Required Google APIs enabled, including Search Console API
 
 The Google OAuth redirect URI must be exactly:
 
@@ -20,7 +20,6 @@ https://marketing.klubnavi.de/oauth/google/callback
 cd ~
 git clone https://github.com/MadMaxen92/marketing-mcp.git
 cd marketing-mcp
-git checkout feature/ga4-mcp-v0.1
 cp .env.example .env
 mkdir -p data
 chmod 700 data
@@ -74,7 +73,9 @@ Open this URL in a browser, replacing the token with `ADMIN_TOKEN` from `.env`:
 https://marketing.klubnavi.de/connect/google?admin_token=YOUR_ADMIN_TOKEN
 ```
 
-Authorize the Google account that has access to the desired GA4 properties. Repeat this process for additional Google accounts.
+Authorize the Google account that has access to the desired GA4 and Search Console
+properties. Repeat this process for additional Google accounts. Reconnect existing
+accounts after adding a new Google OAuth scope.
 
 When the Google OAuth app remains in **Testing**, Google may expire refresh tokens after a limited period. Move the app to Production once the setup has been validated and complete any verification Google requires for the requested scope.
 
@@ -90,8 +91,10 @@ Start with these tool calls:
 
 1. `list_google_connections`
 2. `list_ga4_properties`
-3. `get_ecommerce_overview`
-4. `get_landing_page_performance`
+3. `list_search_console_sites`
+4. `get_search_console_performance`
+5. `get_ecommerce_overview`
+6. `get_landing_page_performance`
 
 ## Operations
 

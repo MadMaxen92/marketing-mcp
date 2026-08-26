@@ -5,6 +5,7 @@ Self-hosted Model Context Protocol server for connecting ChatGPT Work to marketi
 Initial scope:
 
 - Google Analytics 4 via Google OAuth 2.0
+- Google Search Console performance via read-only Google OAuth 2.0
 - Google Ads via Google Ads API
 - Google Merchant Center via Merchant API v1
 - Shopify orders and products via GraphQL Admin API
@@ -15,6 +16,12 @@ Initial scope:
 Merchant Center tools cover account discovery, account and product issues, product
 eligibility, product performance, price insights, and advanced read-only MCQL
 queries. See [docs/MERCHANT_CENTER.md](docs/MERCHANT_CENTER.md) for setup and usage.
+
+Search Console tools discover verified domain and URL-prefix properties and return
+clicks, impressions, CTR, and average position across date, query, page, country,
+device, and search-appearance dimensions. See
+[docs/SEARCH_CONSOLE.md](docs/SEARCH_CONSOLE.md) for setup, query behavior, and
+data limits.
 
 Shopify uses a merchant-owned Dev Dashboard app with short-lived client-credentials
 tokens. Products, collections, sales channels, publication state, and metaobjects

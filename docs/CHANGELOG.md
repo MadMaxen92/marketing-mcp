@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+- Add verified Google Search Console property discovery.
+- Add read-only Search Analytics performance with dimensions, filters,
+  aggregation, data freshness, and pagination controls.
+- Add Search Console's read-only OAuth scope, request validation, tests, and
+  setup documentation.
+
 ## 0.1.0
 
 - Initial self-hosted Marketing MCP.

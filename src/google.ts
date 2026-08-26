@@ -3,20 +3,29 @@ import type { Request, Response } from 'express';
 import { config } from './config.js';
 import { getConnection, readStore, upsertConnection, type GoogleConnection } from './token-store.js';
 
-const SCOPE = [
+export const GOOGLE_OAUTH_SCOPES = [
   'openid',
   'email',
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/adwords',
   'https://www.googleapis.com/auth/content',
-].join(' ');
+  'https://www.googleapis.com/auth/webmasters.readonly',
+] as const;
+export const GOOGLE_REQUIRED_API_SCOPES = GOOGLE_OAUTH_SCOPES.filter((scope) => scope.startsWith('https://'));
+const SCOPE = GOOGLE_OAUTH_SCOPES.join(' ');
 const pendingStates = new Map<string, number>();
 
 type TokenResponse = {
   access_token: string;
   expires_in: number;
   refresh_token?: string;
+  scope?: string;
 };
+
+export function getMissingGoogleApiScopes(grantedScope?: string): string[] {
+  const grantedScopes = new Set((grantedScope ?? '').split(/\s+/).filter(Boolean));
+  return GOOGLE_REQUIRED_API_SCOPES.filter((scope) => !grantedScopes.has(scope));
+}
 
 async function postForm(url: string, values: Record<string, string>): Promise<any> {
   const response = await fetch(url, {
@@ -42,6 +51,7 @@ export function beginGoogleOAuth(req: Request, res: Response): void {
     response_type: 'code',
     scope: SCOPE,
     access_type: 'offline',
+    include_granted_scopes: 'true',
     prompt: 'consent',
     state,
   });
@@ -67,6 +77,11 @@ export async function finishGoogleOAuth(req: Request, res: Response): Promise<vo
   })) as TokenResponse;
 
   if (!tokens.refresh_token) throw new Error('Google did not return a refresh token. Revoke access and reconnect.');
+  const missingScopes = getMissingGoogleApiScopes(tokens.scope);
+  if (missingScopes.length) {
+    res.status(400).type('html').send(`<h1>Google permissions incomplete</h1><p>No connection was saved. Start the connection again and grant every requested permission.</p><p>Missing: ${missingScopes.join(', ')}</p>`);
+    return;
+  }
   const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
     headers: { authorization: `Bearer ${tokens.access_token}` },
   });
@@ -85,7 +100,7 @@ export async function finishGoogleOAuth(req: Request, res: Response): Promise<vo
     updatedAt: now,
   };
   await upsertConnection(connection);
-  res.type('html').send(`<h1>Google connected</h1><p>${profile.email}</p><p>Google Analytics, Google Ads, and Google Merchant Center access have been authorized. You can close this window.</p>`);
+  res.type('html').send(`<h1>Google connected</h1><p>${profile.email}</p><p>Google Analytics, Google Ads, Google Merchant Center, and Google Search Console access have been authorized. You can close this window.</p>`);
 }
 
 export async function getAccessToken(connectionId?: string): Promise<{ token: string; connection: GoogleConnection }> {

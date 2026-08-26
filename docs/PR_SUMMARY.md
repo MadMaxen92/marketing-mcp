@@ -1,13 +1,10 @@
 # Pull request summary
 
-This branch introduces the first self-hosted GA4 MCP implementation:
+This branch adds read-only Google Search Console support to the self-hosted Marketing MCP:
 
-- TypeScript and Node.js 22
-- Streamable HTTP MCP endpoint
-- Bearer-token protection for ChatGPT Work
-- Google OAuth web flow
-- Encrypted multi-account token storage
-- GA4 property discovery
-- Generic GA4 reports
-- Ecommerce and landing-page tools
-- Docker, Nginx, CI, deployment, security, and testing documentation
+- Verified property discovery with exact domain and URL-prefix identifiers
+- Search Analytics clicks, impressions, CTR, and average position
+- Dimensions, filters, search types, aggregation, freshness, and pagination
+- Least-privilege Search Console OAuth scope with encrypted shared credentials
+- Guardrails for invalid API combinations, incomplete hourly data, and date ranges
+- Automated provider tests plus CI, deployment, and operator documentation

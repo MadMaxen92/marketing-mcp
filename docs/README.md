@@ -2,6 +2,7 @@
 
 - [Architecture](ARCHITECTURE.md)
 - [Google Cloud setup](GOOGLE_CLOUD_SETUP.md)
+- [Google Search Console](SEARCH_CONSOLE.md)
 - [Shopify setup](SHOPIFY.md)
 - [Hetzner deployment](DEPLOYMENT.md)
 - [ChatGPT Work setup](CHATGPT_SETUP.md)

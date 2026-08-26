@@ -1,9 +1,10 @@
-# v0.1 test plan
+# v0.8 test plan
 
 ## Build
 
 ```bash
 npm install
+npm test
 npm run typecheck
 npm run build
 docker build -t marketing-mcp:test .
@@ -19,6 +20,11 @@ docker build -t marketing-mcp:test .
 - `list_ga4_properties` returns the expected mambo.cc property.
 - `get_ecommerce_overview` returns data for a known date range.
 - `get_landing_page_performance` returns landing pages and ecommerce metrics.
+- `list_search_console_sites` returns the expected verified domain property.
+- `get_search_console_performance` matches Search Console for the same property,
+  dates, search type, aggregation, dimensions, filters, and data state.
+- Domain properties use their exact `sc-domain:` identifier and URL-prefix
+  properties preserve their exact trailing slash and path.
 
 ## Security
 

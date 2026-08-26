@@ -1,11 +1,12 @@
 # Status
 
-The v0.1 implementation is ready for repository review and server-side validation.
+The v0.8 implementation is ready for repository review and server-side validation.
 
 Pending before production use:
 
 - Run CI and resolve any SDK or TypeScript compatibility issues.
 - Deploy on Hetzner.
-- Complete a real Google OAuth login.
-- Validate the available GA4 property and report metrics.
-- Connect the remote MCP endpoint in ChatGPT Work.
+- Enable Search Console API in the Google Cloud project.
+- Deploy the release and reconnect the existing Google account for the new scope.
+- Refresh the remote MCP connector's discovered tool schema.
+- Validate the domain property and a Search Console performance report against the UI.
