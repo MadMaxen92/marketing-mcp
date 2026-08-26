@@ -24,10 +24,16 @@
 - Orders, products, customers, and inventory
 - Cross-source Shopify and GA4 analysis
 
+## v0.8 — Search Console
+
+- Verified property discovery
+- Daily, query, page, country, device, and search-appearance performance
+- Search type, freshness, aggregation, filters, and pagination controls
+- Read-only OAuth scope and guarded request validation
+
 ## Later
 
 - Google Ads
 - Meta Ads
-- Search Console
 - Klaviyo
 - Linear write tools with explicit confirmation

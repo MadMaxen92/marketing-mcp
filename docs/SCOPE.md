@@ -1,5 +1,8 @@
-# v0.1 scope
+# v0.8 scope
 
-Included: GA4 read access, multiple Google OAuth connections, encrypted token persistence, remote MCP transport, Docker deployment, and ChatGPT Work connection.
+Included: GA4, Google Ads, Merchant Center, and Search Console reporting; multiple
+encrypted Google OAuth connections; guarded Shopify reads and writes; remote MCP
+transport; Docker deployment; and ChatGPT Work connection.
 
-Excluded: Shopify, Google Ads, Meta Ads, Linear writes, team management, and horizontal scaling. These are planned for later releases.
+Excluded: Search Console writes, URL Inspection, sitemap management, Meta Ads,
+Linear writes, team management, and horizontal scaling.

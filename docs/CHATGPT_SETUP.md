@@ -17,13 +17,17 @@ Do not use the Google client secret in ChatGPT. Google OAuth is handled between 
 
 1. `List all connected Google accounts.`
 2. `List all GA4 properties available to the first connected Google account.`
-3. `For the mambo.cc property, show ecommerce performance for the last 30 complete days.`
-4. `Show the 20 landing pages with the most sessions and compare transactions, revenue and session conversion rate.`
+3. `List all verified Search Console properties available to the first connected Google account.`
+4. `For the mambo.cc domain property, show daily Search Console clicks, impressions, CTR, and position for the last 30 finalized days.`
+5. `For the mambo.cc property, show ecommerce performance for the last 30 complete days.`
+6. `Show the 20 landing pages with the most sessions and compare transactions, revenue and session conversion rate.`
 
-## Current tools
+## Suggested starter tools
 
 - `list_google_connections`
 - `list_ga4_properties`
 - `run_ga4_report`
 - `get_ecommerce_overview`
 - `get_landing_page_performance`
+- `list_search_console_sites`
+- `get_search_console_performance`

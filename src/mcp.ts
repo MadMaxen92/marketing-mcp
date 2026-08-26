@@ -18,6 +18,16 @@ import {
   MERCHANT_PRODUCT_STATUSES,
   runMerchantCenterQuery,
 } from './merchant-center.js';
+import {
+  getSearchConsolePerformance,
+  listSearchConsoleSites,
+  SEARCH_CONSOLE_AGGREGATION_TYPES,
+  SEARCH_CONSOLE_DATA_STATES,
+  SEARCH_CONSOLE_DIMENSIONS,
+  SEARCH_CONSOLE_FILTER_DIMENSIONS,
+  SEARCH_CONSOLE_FILTER_OPERATORS,
+  SEARCH_CONSOLE_SEARCH_TYPES,
+} from './search-console.js';
 import { readStore } from './token-store.js';
 import { MARKETING_MCP_VERSION } from './version.js';
 import {
@@ -127,6 +137,38 @@ export function createMarketingMcpServer(): McpServer {
       dimensions: ['landingPagePlusQueryString'],
       metrics: ['sessions', 'engagedSessions', 'transactions', 'purchaseRevenue', 'sessionConversionRate'],
     })),
+  );
+
+  server.tool(
+    'list_search_console_sites',
+    'Lists verified Google Search Console properties available to a connected Google account. Preserve and reuse the exact returned siteUrl.',
+    {
+      connectionId: z.string().optional().describe('Connection ID or Google email. Defaults to the first connection.'),
+    },
+    async ({ connectionId }) => result(await listSearchConsoleSites(connectionId)),
+  );
+
+  server.tool(
+    'get_search_console_performance',
+    'Returns read-only Search Console clicks, impressions, CTR, and average position. Defaults to daily web-search performance; dimensions and AND filters can be customized.',
+    {
+      connectionId: z.string().optional().describe('Connection ID or Google email. Defaults to the first connection.'),
+      siteUrl: z.string().trim().min(1).max(2048).describe('Exact siteUrl from list_search_console_sites, for example sc-domain:example.com or https://www.example.com/.'),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Inclusive date in YYYY-MM-DD format; Search Console uses Pacific Time.'),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Inclusive date in YYYY-MM-DD format; finalized data normally trails by 2–3 days.'),
+      dimensions: z.array(z.enum(SEARCH_CONSOLE_DIMENSIONS)).max(7).default(['date']).describe('Grouping dimensions. Pass an empty array for one aggregate row.'),
+      searchType: z.enum(SEARCH_CONSOLE_SEARCH_TYPES).default('web'),
+      aggregationType: z.enum(SEARCH_CONSOLE_AGGREGATION_TYPES).default('auto'),
+      dataState: z.enum(SEARCH_CONSOLE_DATA_STATES).default('final'),
+      filters: z.array(z.object({
+        dimension: z.enum(SEARCH_CONSOLE_FILTER_DIMENSIONS),
+        operator: z.enum(SEARCH_CONSOLE_FILTER_OPERATORS),
+        expression: z.string().min(1).max(4096),
+      })).max(10).optional().describe('Optional filters combined with AND.'),
+      rowLimit: z.number().int().min(1).max(25000).default(1000),
+      startRow: z.number().int().min(0).default(0),
+    },
+    async (input) => result(await getSearchConsolePerformance(input)),
   );
 
   server.tool(

@@ -1,1 +1,1 @@
-A pull request should be opened from `feature/ga4-mcp-v0.1` into `main` to trigger CI validation.
+A pull request should be opened from `codex/google-search-console` into `main` to trigger CI validation.

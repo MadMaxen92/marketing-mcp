@@ -12,6 +12,7 @@ Docker container
   -> Shopify client-credentials token cache (memory only)
 Google Analytics Admin API
 Google Analytics Data API
+Google Search Console API
 Google Ads API
 Google Merchant API
 Shopify GraphQL Admin API
@@ -25,10 +26,15 @@ Authentication has two separate layers:
 
 The first release is stateless at the MCP transport layer. Each MCP request creates a fresh server and transport, while Google account connections persist in the encrypted file store.
 
-GA4, Google Ads, and Merchant Center share the same Google OAuth connection.
+GA4, Google Ads, Merchant Center, and Search Console share the same Google OAuth connection.
 Merchant Center calls use the stable Merchant API v1 endpoints for accounts,
 reports, products, and issue resolution. No legacy Content API for Shopping
 endpoint is used.
+
+Search Console calls use only the read-only `webmasters.readonly` OAuth scope.
+Property discovery preserves Google's exact domain or URL-prefix identifier, and
+performance queries URL-encode that complete identifier before calling the Search
+Analytics API.
 
 Shopify calls use the stable GraphQL Admin API `2026-07`. Order tools remain
 read-only and do not query customer identity fields. Product descriptions use a
