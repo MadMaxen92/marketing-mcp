@@ -100,6 +100,26 @@ type ShopifyCollectionPublicationConfirmation = {
   expiresAt: string;
 };
 
+type ShopifyThemeFileInput = {
+  filename: string;
+  content: string;
+};
+
+type ShopifyThemeFileConfirmation = {
+  version: 1;
+  kind: 'theme_files_upsert';
+  shop: string;
+  themeId: string;
+  expectedThemeUpdatedAt: string;
+  files: Array<{
+    filename: string;
+    currentContentHash: string | null;
+    proposedContentHash: string;
+  }>;
+  confirmationCode: string;
+  expiresAt: string;
+};
+
 type ShopifyPublication = {
   id: string;
   name: string;
@@ -387,6 +407,62 @@ function verifyCollectionConfirmation(
   }
   if (Date.parse(payload.expiresAt) <= Date.now()) {
     throw new Error('Shopify collection confirmation expired. Create a new preview.');
+  }
+  return payload;
+}
+
+function signThemeConfirmation(payload: ShopifyThemeFileConfirmation): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function verifyThemeConfirmation(token: string): ShopifyThemeFileConfirmation {
+  const [encoded, signature, extra] = token.split('.');
+  if (!encoded || !signature || extra) {
+    throw new Error('Invalid Shopify theme confirmation token. Create a new preview.');
+  }
+  const expected = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest();
+  let received: Buffer;
+  try {
+    received = Buffer.from(signature, 'base64url');
+  } catch {
+    throw new Error('Invalid Shopify theme confirmation token. Create a new preview.');
+  }
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+    throw new Error('Invalid Shopify theme confirmation token. Create a new preview.');
+  }
+
+  let payload: ShopifyThemeFileConfirmation;
+  try {
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('Invalid Shopify theme confirmation token. Create a new preview.');
+  }
+  const filesValid = Array.isArray(payload.files)
+    && payload.files.length >= 1
+    && payload.files.length <= 20
+    && payload.files.every((file) =>
+      typeof file.filename === 'string'
+      && (file.currentContentHash === null || /^[a-f0-9]{64}$/.test(file.currentContentHash))
+      && /^[a-f0-9]{64}$/.test(file.proposedContentHash),
+    );
+  if (
+    payload.version !== 1
+    || payload.kind !== 'theme_files_upsert'
+    || typeof payload.shop !== 'string'
+    || !/^gid:\/\/shopify\/OnlineStoreTheme\/\d+$/.test(payload.themeId)
+    || typeof payload.expectedThemeUpdatedAt !== 'string'
+    || !Number.isFinite(Date.parse(payload.expectedThemeUpdatedAt))
+    || !filesValid
+    || !/^SHOPIFY-[A-F0-9]{8}$/.test(payload.confirmationCode)
+    || typeof payload.expiresAt !== 'string'
+    || !Number.isFinite(Date.parse(payload.expiresAt))
+  ) {
+    throw new Error('Invalid Shopify theme confirmation token. Create a new preview.');
+  }
+  if (Date.parse(payload.expiresAt) <= Date.now()) {
+    throw new Error('Shopify theme confirmation expired. Create a new preview.');
   }
   return payload;
 }
@@ -686,6 +762,313 @@ export async function listShopifyProducts(input: {
     shop: getCredentials().shop,
     products: data.products.nodes,
     nextPageToken: data.products.pageInfo.hasNextPage ? data.products.pageInfo.endCursor : undefined,
+  };
+}
+
+const SHOPIFY_PDP_THEME_FILE_PATTERN = /^(?:templates\/product(?:\.[a-z0-9][a-z0-9_-]*)?\.json|sections\/[a-z0-9][a-z0-9_-]*\.liquid|snippets\/[a-z0-9][a-z0-9_-]*\.liquid|assets\/[a-z0-9][a-z0-9_.-]*\.(?:css|js|css\.liquid|js\.liquid))$/;
+
+type ShopifyThemeFile = {
+  filename: string;
+  checksumMd5?: string | null;
+  contentType: string;
+  createdAt: string;
+  updatedAt: string;
+  size: string | number;
+  body: {
+    content?: string;
+    contentBase64?: string;
+    url?: string;
+  };
+};
+
+type ShopifyTheme = {
+  id: string;
+  name: string;
+  role: string;
+  prefix: string;
+  processing: boolean;
+  processingFailed: boolean;
+  themeStoreId?: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function validateShopifyThemeFilenames(filenames: string[]): string[] {
+  if (!filenames.length || filenames.length > 20) {
+    throw new Error('Provide between 1 and 20 Shopify PDP theme filenames.');
+  }
+  const seen = new Set<string>();
+  return filenames.map((value) => {
+    const filename = value.trim();
+    if (!SHOPIFY_PDP_THEME_FILE_PATTERN.test(filename)) {
+      throw new Error(
+        `Unsupported Shopify PDP theme filename: ${filename}. Allowed: product JSON templates, sections, snippets, and CSS/JS assets.`,
+      );
+    }
+    if (seen.has(filename)) throw new Error(`Duplicate Shopify theme filename: ${filename}`);
+    seen.add(filename);
+    return filename;
+  });
+}
+
+function validateShopifyThemeFiles(files: ShopifyThemeFileInput[]): ShopifyThemeFileInput[] {
+  const filenames = validateShopifyThemeFilenames(files.map(({ filename }) => filename));
+  let totalBytes = 0;
+  const normalized = files.map((file, index) => {
+    const filename = filenames[index]!;
+    const bytes = Buffer.byteLength(file.content, 'utf8');
+    if (bytes > 150_000) throw new Error(`Shopify theme file exceeds 150 KB: ${filename}`);
+    totalBytes += bytes;
+    if (filename.endsWith('.json')) {
+      try {
+        JSON.parse(file.content);
+      } catch {
+        throw new Error(`Shopify theme JSON is invalid: ${filename}`);
+      }
+    }
+    return { filename, content: file.content };
+  });
+  if (totalBytes > 500_000) throw new Error('Shopify theme update exceeds the 500 KB safety limit.');
+  return normalized;
+}
+
+async function getShopifyThemeFilesState(
+  themeId: string,
+  filenames: string[],
+  requireWrite: boolean,
+): Promise<{
+  theme: ShopifyTheme;
+  files: ShopifyThemeFile[];
+  fileErrors: Array<{ code?: string | null; filename?: string | null }>;
+  accessScopes: string[];
+}> {
+  const data = await shopifyGraphql<{
+    theme?: (ShopifyTheme & {
+      files: {
+        nodes: ShopifyThemeFile[];
+        userErrors: Array<{ code?: string | null; filename?: string | null }>;
+      };
+    }) | null;
+    currentAppInstallation: { accessScopes: Array<{ handle: string }> };
+  }>(`query ShopifyThemeFiles($themeId: ID!, $filenames: [String!]!, $first: Int!) {
+    theme(id: $themeId) {
+      id name role prefix processing processingFailed themeStoreId createdAt updatedAt
+      files(filenames: $filenames, first: $first) {
+        nodes {
+          filename checksumMd5 contentType createdAt updatedAt size
+          body {
+            ... on OnlineStoreThemeFileBodyText { content }
+            ... on OnlineStoreThemeFileBodyBase64 { contentBase64 }
+            ... on OnlineStoreThemeFileBodyUrl { url }
+          }
+        }
+        userErrors { code filename }
+      }
+    }
+    currentAppInstallation { accessScopes { handle } }
+  }`, { themeId, filenames, first: filenames.length });
+  if (!data.theme?.id) throw new Error(`Shopify theme not found: ${themeId}`);
+  const accessScopes = data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort();
+  if (!accessScopes.includes('read_themes')) {
+    throw new Error('Shopify read_themes is not granted to the installed app.');
+  }
+  if (requireWrite && !accessScopes.includes('write_themes')) {
+    throw new Error('Shopify write_themes is not granted to the installed app.');
+  }
+  const { files, ...theme } = data.theme;
+  return { theme, files: files.nodes, fileErrors: files.userErrors, accessScopes };
+}
+
+export async function listShopifyThemes(input: {
+  roles?: string[];
+  limit?: number;
+  pageToken?: string;
+}): Promise<any> {
+  const first = Math.min(Math.max(input.limit ?? 20, 1), 50);
+  const data = await shopifyGraphql<{
+    themes: {
+      nodes: ShopifyTheme[];
+      pageInfo: { hasNextPage: boolean; endCursor?: string };
+    };
+    currentAppInstallation: { accessScopes: Array<{ handle: string }> };
+  }>(`query ShopifyThemes($first: Int!, $after: String, $roles: [ThemeRole!]) {
+    themes(first: $first, after: $after, roles: $roles) {
+      nodes { id name role prefix processing processingFailed themeStoreId createdAt updatedAt }
+      pageInfo { hasNextPage endCursor }
+    }
+    currentAppInstallation { accessScopes { handle } }
+  }`, { first, after: input.pageToken, roles: input.roles?.length ? input.roles : undefined });
+  const accessScopes = data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort();
+  if (!accessScopes.includes('read_themes')) {
+    throw new Error('Shopify read_themes is not granted to the installed app.');
+  }
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    themes: data.themes.nodes,
+    nextPageToken: data.themes.pageInfo.hasNextPage ? data.themes.pageInfo.endCursor : undefined,
+    accessScopes,
+  };
+}
+
+export async function getShopifyThemeFiles(input: {
+  themeId: string;
+  filenames: string[];
+}): Promise<any> {
+  const filenames = validateShopifyThemeFilenames(input.filenames);
+  const state = await getShopifyThemeFilesState(input.themeId, filenames, false);
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    theme: state.theme,
+    files: state.files,
+    fileErrors: state.fileErrors,
+    accessScopes: state.accessScopes,
+  };
+}
+
+export async function previewShopifyThemeFilesUpsert(input: {
+  themeId: string;
+  files: ShopifyThemeFileInput[];
+}): Promise<any> {
+  const files = validateShopifyThemeFiles(input.files);
+  const state = await getShopifyThemeFilesState(input.themeId, files.map(({ filename }) => filename), true);
+  if (state.theme.role !== 'UNPUBLISHED') {
+    throw new Error(`Shopify theme writes are allowed only for UNPUBLISHED themes, not ${state.theme.role}.`);
+  }
+  if (state.theme.processing || state.theme.processingFailed) {
+    throw new Error('Shopify theme is processing or has failed processing. Resolve that state before editing files.');
+  }
+  const existingByFilename = new Map(state.files.map((file) => [file.filename, file]));
+  const confirmationFiles = files.map((file) => {
+    const existing = existingByFilename.get(file.filename);
+    if (existing && typeof existing.body.content !== 'string') {
+      throw new Error(`Refusing to overwrite non-text Shopify theme file: ${file.filename}`);
+    }
+    return {
+      filename: file.filename,
+      currentContentHash: existing ? sha256(existing.body.content ?? '') : null,
+      proposedContentHash: sha256(file.content),
+    };
+  });
+  const confirmationCode = `SHOPIFY-${randomBytes(4).toString('hex').toUpperCase()}`;
+  const expiresAt = new Date(Date.now() + SHOPIFY_WRITE_CONFIRMATION_TTL_MS).toISOString();
+  const confirmation: ShopifyThemeFileConfirmation = {
+    version: 1,
+    kind: 'theme_files_upsert',
+    shop: getCredentials().shop,
+    themeId: input.themeId,
+    expectedThemeUpdatedAt: state.theme.updatedAt,
+    files: confirmationFiles,
+    confirmationCode,
+    expiresAt,
+  };
+  return {
+    dryRun: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    theme: state.theme,
+    changes: files.map((file) => ({
+      filename: file.filename,
+      action: existingByFilename.has(file.filename) ? 'UPDATE' : 'CREATE',
+      currentContent: existingByFilename.get(file.filename)?.body.content,
+      proposedContent: file.content,
+      currentContentHash: confirmationFiles.find(({ filename }) => filename === file.filename)?.currentContentHash,
+      proposedContentHash: sha256(file.content),
+    })),
+    fileErrors: state.fileErrors,
+    safety: {
+      accessScopes: state.accessScopes,
+      liveThemeProtected: true,
+      allowedThemeRole: 'UNPUBLISHED',
+      confirmationCode,
+      expiresAt,
+      instruction: `Show the full preview to the user. Apply it only after the user explicitly replies with ${confirmationCode}.`,
+    },
+    confirmationToken: signThemeConfirmation(confirmation),
+  };
+}
+
+export async function applyShopifyThemeFilesUpsert(input: {
+  themeId: string;
+  files: ShopifyThemeFileInput[];
+  confirmationCode: string;
+  confirmationToken: string;
+}): Promise<any> {
+  const confirmation = verifyThemeConfirmation(input.confirmationToken);
+  const files = validateShopifyThemeFiles(input.files);
+  const { shop } = getCredentials();
+  const proposed = files.map((file) => ({ filename: file.filename, proposedContentHash: sha256(file.content) }));
+  if (
+    confirmation.shop !== shop
+    || confirmation.themeId !== input.themeId
+    || confirmation.confirmationCode !== input.confirmationCode
+    || JSON.stringify(confirmation.files.map(({ filename, proposedContentHash }) => ({ filename, proposedContentHash })))
+      !== JSON.stringify(proposed)
+  ) {
+    throw new Error('Shopify theme confirmation does not match this file update. Create a new preview.');
+  }
+
+  const state = await getShopifyThemeFilesState(input.themeId, files.map(({ filename }) => filename), true);
+  if (state.theme.role !== 'UNPUBLISHED') {
+    throw new Error('Shopify theme is no longer UNPUBLISHED. Refusing to modify it.');
+  }
+  if (state.theme.updatedAt !== confirmation.expectedThemeUpdatedAt) {
+    throw new Error('The Shopify theme changed after the preview. Review it and create a new preview.');
+  }
+  const existingByFilename = new Map(state.files.map((file) => [file.filename, file]));
+  for (const expected of confirmation.files) {
+    const existing = existingByFilename.get(expected.filename);
+    if (existing && typeof existing.body.content !== 'string') {
+      throw new Error(`Refusing to overwrite non-text Shopify theme file: ${expected.filename}`);
+    }
+    const currentHash = existing ? sha256(existing.body.content ?? '') : null;
+    if (currentHash !== expected.currentContentHash) {
+      throw new Error(`Shopify theme file changed after preview: ${expected.filename}`);
+    }
+  }
+
+  const data = await shopifyGraphql<{
+    themeFilesUpsert: {
+      job?: { id: string } | null;
+      upsertedThemeFiles: Array<{
+        filename: string;
+        checksumMd5?: string | null;
+        createdAt: string;
+        updatedAt: string;
+        size: string | number;
+      }>;
+      userErrors: Array<{ field?: string[] | null; message: string; code?: string | null }>;
+    };
+  }>(`mutation ShopifyThemeFilesUpsert($themeId: ID!, $files: [OnlineStoreThemeFilesUpsertFileInput!]!) {
+    themeFilesUpsert(themeId: $themeId, files: $files) {
+      job { id }
+      upsertedThemeFiles { filename checksumMd5 createdAt updatedAt size }
+      userErrors { field message code }
+    }
+  }`, {
+    themeId: input.themeId,
+    files: files.map((file) => ({ filename: file.filename, body: { type: 'TEXT', value: file.content } })),
+  });
+  if (data.themeFilesUpsert.userErrors.length) {
+    throw new Error(`Shopify theme file update failed: ${JSON.stringify(data.themeFilesUpsert.userErrors)}`);
+  }
+  console.info(JSON.stringify({
+    event: 'shopify_theme_files_upsert',
+    shop,
+    themeId: input.themeId,
+    filenames: files.map(({ filename }) => filename),
+    appliedAt: new Date().toISOString(),
+  }));
+  return {
+    applied: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop,
+    theme: state.theme,
+    upsertedThemeFiles: data.themeFilesUpsert.upsertedThemeFiles,
+    job: data.themeFilesUpsert.job,
+    recoverySnapshot: state.files.map((file) => ({ filename: file.filename, content: file.body.content })),
+    createdFiles: files.filter(({ filename }) => !existingByFilename.has(filename)).map(({ filename }) => filename),
   };
 }
 

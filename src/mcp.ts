@@ -35,21 +35,25 @@ import {
   applyShopifyCollectionPublicationUpdate,
   applyShopifyCollectionUpdate,
   applyShopifyProductDescriptionUpdate,
+  applyShopifyThemeFilesUpsert,
   getShopifyCollection,
   getShopifyCollectionPublicationStatus,
   getShopifyMetaobject,
   getShopifySalesOverview,
   getShopifyShopOverview,
+  getShopifyThemeFiles,
   listShopifyOrderDeliveryDetails,
   listShopifyCollections,
   listShopifyMetaobjectDefinitions,
   listShopifyMetaobjects,
   listShopifyPublications,
   listShopifyProducts,
+  listShopifyThemes,
   previewShopifyCollectionProductsUpdate,
   previewShopifyCollectionPublicationUpdate,
   previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
+  previewShopifyThemeFilesUpsert,
 } from './shopify.js';
 
 const SHOPIFY_COLLECTION_SORT_ORDERS = [
@@ -63,6 +67,8 @@ const SHOPIFY_COLLECTION_SORT_ORDERS = [
   'PRICE_ASC',
   'PRICE_DESC',
 ] as const;
+
+const SHOPIFY_THEME_ROLES = ['MAIN', 'UNPUBLISHED', 'DEVELOPMENT', 'DEMO'] as const;
 
 function result(value: unknown) {
   return {
@@ -332,6 +338,55 @@ export function createMarketingMcpServer(): McpServer {
       pageToken: z.string().optional(),
     },
     async (input) => result(await listShopifyProducts(input)),
+  );
+
+  server.tool(
+    'list_shopify_themes',
+    'Lists Shopify Online Store themes and their roles. MAIN is live; all theme file writes are restricted to UNPUBLISHED themes. Requires read_themes.',
+    {
+      roles: z.array(z.enum(SHOPIFY_THEME_ROLES)).max(4).optional(),
+      limit: z.number().int().min(1).max(50).default(20),
+      pageToken: z.string().optional(),
+    },
+    async (input) => result(await listShopifyThemes(input)),
+  );
+
+  server.tool(
+    'get_shopify_theme_files',
+    'Reads up to 20 selected PDP-related text files from one Shopify theme. Supports product JSON templates, sections, snippets, and CSS/JS assets. Requires read_themes.',
+    {
+      themeId: z.string().regex(/^gid:\/\/shopify\/OnlineStoreTheme\/\d+$/),
+      filenames: z.array(z.string().min(1).max(255)).min(1).max(20),
+    },
+    async (input) => result(await getShopifyThemeFiles(input)),
+  );
+
+  server.tool(
+    'preview_shopify_theme_files_upsert',
+    'Creates a read-only preview for creating or updating selected PDP theme files. It never writes and rejects live, demo, or development themes. Use only an UNPUBLISHED theme.',
+    {
+      themeId: z.string().regex(/^gid:\/\/shopify\/OnlineStoreTheme\/\d+$/),
+      files: z.array(z.object({
+        filename: z.string().min(1).max(255),
+        content: z.string().max(150000),
+      })).min(1).max(20),
+    },
+    async (input) => result(await previewShopifyThemeFilesUpsert(input)),
+  );
+
+  server.tool(
+    'apply_shopify_theme_files_upsert',
+    'Applies exactly one previewed PDP theme-file update to an UNPUBLISHED Shopify theme. Call only after showing the full preview and the user explicitly replies with its exact SHOPIFY confirmation code. Refuses live-theme, altered, expired, or stale updates.',
+    {
+      themeId: z.string().regex(/^gid:\/\/shopify\/OnlineStoreTheme\/\d+$/),
+      files: z.array(z.object({
+        filename: z.string().min(1).max(255),
+        content: z.string().max(150000),
+      })).min(1).max(20),
+      confirmationCode: z.string().regex(/^SHOPIFY-[A-F0-9]{8}$/),
+      confirmationToken: z.string().min(80).max(10000),
+    },
+    async (input) => result(await applyShopifyThemeFilesUpsert(input)),
   );
 
   server.tool(

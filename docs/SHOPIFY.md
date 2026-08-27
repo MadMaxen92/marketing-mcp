@@ -18,6 +18,9 @@ Configure these app scopes:
   design-family, and related-product data
 - `write_metaobject_definitions` and `write_metaobjects` are reserved for the
   later schema rollout; the current MCP release exposes no Metaobject write tool
+- `read_themes` for listing themes and reading selected PDP theme files
+- `write_themes` for guarded PDP file updates on unpublished themes only; Shopify
+  must also grant the app an exemption for theme-file modification
 - `read_all_orders` when historical order analysis beyond 60 days is needed and
   Shopify has granted access
 
@@ -74,6 +77,14 @@ curl -fsS http://127.0.0.1:8000/health
 
 - `get_shopify_shop_overview`: verifies authentication, reports shop metadata,
   API version, and the scopes actually granted to the installed app.
+- `list_shopify_themes`: lists Online Store themes and identifies live and
+  unpublished roles.
+- `get_shopify_theme_files`: reads up to 20 selected PDP template, section,
+  snippet, CSS, or JavaScript files.
+- `preview_shopify_theme_files_upsert` and `apply_shopify_theme_files_upsert`:
+  create or update PDP-related text files only on an `UNPUBLISHED` theme. The
+  apply tool requires an exact short-lived confirmation, rechecks every file,
+  and refuses live, demo, or development themes.
 - `list_shopify_products`: lists products and the first 20 variants per product,
   with product pagination.
 - `list_shopify_collections`: lists manual and automated collections with product
@@ -121,6 +132,11 @@ manual collections and one add or remove action per preview. Collection publicat
 updates are bound to the exact selected sales channels and the publication state
 read during preview. Audit logs never contain confirmation tokens or description
 text. Successful metadata updates return the previous values as a recovery snapshot.
+Theme updates are additionally restricted to product JSON templates, sections,
+snippets, and CSS/JavaScript assets, with a maximum of 20 files and 500 KB per
+confirmed operation. Layout, configuration, locale, and non-PDP template files
+are rejected. Shopify requires `write_themes` plus a theme-file exemption before
+the GraphQL mutation can succeed.
 
 The sales tool excludes test and cancelled orders by default, processes up to
 1,000 orders by default, and reports when the configured cap truncates a result.
@@ -149,3 +165,5 @@ when Shopify has not received the corresponding tracking event.
 10. `Liste alle Shopify-Verkaufskanäle und ihren Veröffentlichungsmodus auf.`
 11. `Zeige, auf welchen Verkaufskanälen Collection <ID> veröffentlicht ist.`
 12. `Liste alle Metaobject-Definitionen auf.`
+13. `Liste alle unveröffentlichten Shopify-Themes auf.`
+14. `Lies templates/product.json aus Theme <THEME_ID>.`

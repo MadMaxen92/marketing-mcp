@@ -24,16 +24,20 @@ const {
   applyShopifyCollectionPublicationUpdate,
   applyShopifyCollectionUpdate,
   applyShopifyProductDescriptionUpdate,
+  applyShopifyThemeFilesUpsert,
   buildShopifyOrdersSearchQuery,
   getShopifyShopOverview,
+  getShopifyThemeFiles,
   listShopifyCollections,
   listShopifyMetaobjectDefinitions,
   listShopifyMetaobjects,
   listShopifyPublications,
+  listShopifyThemes,
   previewShopifyCollectionProductsUpdate,
   previewShopifyCollectionPublicationUpdate,
   previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
+  previewShopifyThemeFilesUpsert,
   shopifyDescriptionTextToHtml,
   summarizeShopifyOrderDetail,
   summarizeShopifyOrders,
@@ -601,4 +605,133 @@ test('reads publications and metaobjects and guards collection unpublishing', as
   assert.equal(definitions.definitions[0].type, 'drop');
   const metaobjects = await listShopifyMetaobjects({ type: 'drop', limit: 100 });
   assert.equal(metaobjects.metaobjects[0].handle, 'summer-2026');
+});
+
+test('reads themes and requires an exact preview before writing only PDP files to an unpublished theme', async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  context.mock.method(console, 'info', () => undefined);
+
+  const themeId = 'gid://shopify/OnlineStoreTheme/987';
+  const theme = {
+    id: themeId,
+    name: 'Mambo PDP Draft',
+    role: 'UNPUBLISHED',
+    prefix: 'mambo-pdp-draft',
+    processing: false,
+    processingFailed: false,
+    themeStoreId: null,
+    createdAt: '2026-08-20T08:00:00Z',
+    updatedAt: '2026-08-20T09:00:00Z',
+  };
+  const existingSection = {
+    filename: 'sections/mambo-product.liquid',
+    checksumMd5: 'old-md5',
+    contentType: 'text/x-liquid',
+    createdAt: '2026-08-20T08:00:00Z',
+    updatedAt: '2026-08-20T09:00:00Z',
+    size: '15',
+    body: { content: '<p>Old PDP</p>' },
+  };
+  const files = [
+    { filename: 'templates/product.mambo.json', content: '{"sections":{},"order":[]}' },
+    { filename: 'sections/mambo-product.liquid', content: '<p>New PDP</p>' },
+  ];
+  let forceMainRole = false;
+  let mutationCount = 0;
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      query: string;
+      variables: Record<string, any>;
+    };
+    if (request.query.includes('query ShopifyThemes(')) {
+      assert.deepEqual(request.variables.roles, ['UNPUBLISHED']);
+      return new Response(JSON.stringify({
+        data: {
+          themes: { nodes: [theme], pageInfo: { hasNextPage: false } },
+          currentAppInstallation: { accessScopes: [{ handle: 'read_themes' }, { handle: 'write_themes' }] },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyThemeFiles(')) {
+      return new Response(JSON.stringify({
+        data: {
+          theme: {
+            ...theme,
+            role: forceMainRole ? 'MAIN' : theme.role,
+            files: { nodes: [existingSection], userErrors: [] },
+          },
+          currentAppInstallation: { accessScopes: [{ handle: 'read_themes' }, { handle: 'write_themes' }] },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('mutation ShopifyThemeFilesUpsert')) {
+      mutationCount += 1;
+      assert.deepEqual(request.variables, {
+        themeId,
+        files: files.map((file) => ({ filename: file.filename, body: { type: 'TEXT', value: file.content } })),
+      });
+      return new Response(JSON.stringify({
+        data: {
+          themeFilesUpsert: {
+            job: { id: 'gid://shopify/Job/1' },
+            upsertedThemeFiles: files.map((file) => ({
+              filename: file.filename,
+              checksumMd5: 'new-md5',
+              createdAt: '2026-08-20T10:00:00Z',
+              updatedAt: '2026-08-20T10:00:00Z',
+              size: String(file.content.length),
+            })),
+            userErrors: [],
+          },
+        },
+      }), { status: 200 });
+    }
+    throw new Error(`Unexpected Shopify test query: ${request.query}`);
+  };
+
+  const themes = await listShopifyThemes({ roles: ['UNPUBLISHED'] });
+  assert.equal(themes.themes[0].name, 'Mambo PDP Draft');
+  const read = await getShopifyThemeFiles({ themeId, filenames: ['sections/mambo-product.liquid'] });
+  assert.equal(read.files[0].body.content, '<p>Old PDP</p>');
+
+  const preview = await previewShopifyThemeFilesUpsert({ themeId, files });
+  assert.equal(preview.dryRun, true);
+  assert.deepEqual(preview.changes.map(({ action }: { action: string }) => action), ['CREATE', 'UPDATE']);
+  await assert.rejects(
+    () => applyShopifyThemeFilesUpsert({
+      themeId,
+      files: [
+        { filename: files[0]!.filename, content: '{"sections":{"changed":{}},"order":[]}' },
+        files[1]!,
+      ],
+      confirmationCode: preview.safety.confirmationCode,
+      confirmationToken: preview.confirmationToken,
+    }),
+    /does not match/,
+  );
+  const applied = await applyShopifyThemeFilesUpsert({
+    themeId,
+    files,
+    confirmationCode: preview.safety.confirmationCode,
+    confirmationToken: preview.confirmationToken,
+  });
+  assert.equal(applied.applied, true);
+  assert.deepEqual(applied.createdFiles, ['templates/product.mambo.json']);
+  assert.equal(mutationCount, 1);
+
+  forceMainRole = true;
+  await assert.rejects(
+    () => previewShopifyThemeFilesUpsert({ themeId, files }),
+    /allowed only for UNPUBLISHED themes/,
+  );
+  await assert.rejects(
+    () => previewShopifyThemeFilesUpsert({
+      themeId,
+      files: [{ filename: 'layout/theme.liquid', content: 'unsafe' }],
+    }),
+    /Unsupported Shopify PDP theme filename/,
+  );
 });
