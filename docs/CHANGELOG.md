@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- Added read-only Shopify delivery-profile discovery with locations, zones,
+  merchant-defined rates, and conditions.
+- Added guarded preview/apply tools for existing Shopify flat-rate prices and
+  kilogram weight bands through `deliveryProfileUpdate`.
+
 ## 0.8.0
 
 - Add verified Google Search Console property discovery.

@@ -20,6 +20,7 @@ Object.assign(process.env, {
 });
 
 const {
+  applyShopifyShippingRatesUpdate,
   applyShopifyCollectionProductsUpdate,
   applyShopifyCollectionPublicationUpdate,
   applyShopifyCollectionUpdate,
@@ -27,6 +28,7 @@ const {
   applyShopifyThemeFilesUpsert,
   buildShopifyOrdersSearchQuery,
   getShopifyShopOverview,
+  getShopifyShippingProfiles,
   getShopifyThemeFiles,
   listShopifyCollections,
   listShopifyMetaobjectDefinitions,
@@ -37,6 +39,7 @@ const {
   previewShopifyCollectionPublicationUpdate,
   previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
+  previewShopifyShippingRatesUpdate,
   previewShopifyThemeFilesUpsert,
   shopifyDescriptionTextToHtml,
   summarizeShopifyOrderDetail,
@@ -605,6 +608,190 @@ test('reads publications and metaobjects and guards collection unpublishing', as
   assert.equal(definitions.definitions[0].type, 'drop');
   const metaobjects = await listShopifyMetaobjects({ type: 'drop', limit: 100 });
   assert.equal(metaobjects.metaobjects[0].handle, 'summer-2026');
+});
+
+test('reads Shopify delivery profiles and guards flat-rate price and weight-band updates', async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  context.mock.method(console, 'info', () => undefined);
+
+  const profileId = 'gid://shopify/DeliveryProfile/10';
+  const locationGroupId = 'gid://shopify/DeliveryLocationGroup/20';
+  const zoneId = 'gid://shopify/DeliveryZone/30';
+  const methodDefinitionId = 'gid://shopify/DeliveryMethodDefinition/40';
+  const rateDefinitionId = 'gid://shopify/DeliveryRateDefinition/50';
+  const profile = {
+    id: profileId,
+    name: 'General profile',
+    default: true,
+    profileLocationGroups: [{
+      locationGroup: {
+        id: locationGroupId,
+        locations: {
+          nodes: [{ id: 'gid://shopify/Location/60', name: 'Inkthreadable Warehouse' }],
+          pageInfo: { hasNextPage: false },
+        },
+      },
+      locationGroupZones: {
+        nodes: [{
+          zone: {
+            id: zoneId,
+            name: 'Europe Zone 1',
+            countries: [{
+              name: 'Germany',
+              code: { countryCode: 'DE', restOfWorld: false },
+              provinces: [],
+            }],
+          },
+          methodDefinitions: {
+            nodes: [{
+              id: methodDefinitionId,
+              name: 'International Tracked',
+              description: null,
+              active: true,
+              rateProvider: {
+                __typename: 'DeliveryRateDefinition',
+                id: rateDefinitionId,
+                price: { amount: '8.95', currencyCode: 'GBP' },
+              },
+              methodConditions: [
+                {
+                  id: 'gid://shopify/DeliveryCondition/70',
+                  field: 'TOTAL_WEIGHT',
+                  operator: 'GREATER_THAN_OR_EQUAL_TO',
+                  conditionCriteria: { __typename: 'Weight', unit: 'KILOGRAMS', value: 0 },
+                },
+                {
+                  id: 'gid://shopify/DeliveryCondition/71',
+                  field: 'TOTAL_WEIGHT',
+                  operator: 'LESS_THAN_OR_EQUAL_TO',
+                  conditionCriteria: { __typename: 'Weight', unit: 'KILOGRAMS', value: 0.2 },
+                },
+              ],
+            }],
+            pageInfo: { hasNextPage: false },
+          },
+        }],
+        pageInfo: { hasNextPage: false },
+      },
+    }],
+  };
+  const scopes = [{ handle: 'read_shipping' }, { handle: 'write_shipping' }];
+  let mutationCount = 0;
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      query: string;
+      variables: Record<string, any>;
+    };
+    if (request.query.includes('query ShopifyShippingProfiles')) {
+      assert.deepEqual(request.variables, {
+        first: 20,
+        merchantOwnedOnly: true,
+      });
+      return new Response(JSON.stringify({
+        data: {
+          deliveryProfiles: {
+            nodes: [profile],
+            pageInfo: { hasNextPage: false },
+          },
+          currentAppInstallation: { accessScopes: scopes },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('query ShopifyShippingProfileForWrite')) {
+      assert.deepEqual(request.variables, { id: profileId });
+      return new Response(JSON.stringify({
+        data: {
+          deliveryProfile: profile,
+          currentAppInstallation: { accessScopes: scopes },
+        },
+      }), { status: 200 });
+    }
+    if (request.query.includes('mutation ShopifyShippingRatesUpdate')) {
+      mutationCount += 1;
+      assert.deepEqual(request.variables, {
+        id: profileId,
+        profile: {
+          locationGroupsToUpdate: [{
+            id: locationGroupId,
+            zonesToUpdate: [{
+              id: zoneId,
+              methodDefinitionsToUpdate: [{
+                id: methodDefinitionId,
+                rateDefinition: {
+                  id: rateDefinitionId,
+                  price: { amount: '9.42', currencyCode: 'GBP' },
+                },
+                weightConditionsToCreate: [
+                  {
+                    operator: 'GREATER_THAN_OR_EQUAL_TO',
+                    criteria: { unit: 'KILOGRAMS', value: 0 },
+                  },
+                  {
+                    operator: 'LESS_THAN_OR_EQUAL_TO',
+                    criteria: { unit: 'KILOGRAMS', value: 0.1 },
+                  },
+                ],
+              }],
+            }],
+          }],
+          conditionsToDelete: [
+            'gid://shopify/DeliveryCondition/70',
+            'gid://shopify/DeliveryCondition/71',
+          ],
+        },
+      });
+      return new Response(JSON.stringify({
+        data: {
+          deliveryProfileUpdate: {
+            profile: { id: profileId, name: 'General profile' },
+            userErrors: [],
+          },
+        },
+      }), { status: 200 });
+    }
+    throw new Error(`Unexpected Shopify test query: ${request.query}`);
+  };
+
+  const listed = await getShopifyShippingProfiles();
+  assert.equal(listed.profiles[0].profileLocationGroups[0].locationGroupZones.nodes[0].zone.name, 'Europe Zone 1');
+  assert.deepEqual(listed.accessScopes, ['read_shipping', 'write_shipping']);
+
+  const updates = [{
+    locationGroupId,
+    zoneId,
+    methodDefinitionId,
+    priceAmount: 9.42,
+    weightRangeKg: { min: 0, max: 0.1 },
+  }];
+  const preview = await previewShopifyShippingRatesUpdate({ profileId, updates });
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.changes[0].current.rateProvider.price.amount, '8.95');
+  assert.equal(preview.changes[0].proposed.priceAmount, 9.42);
+  assert.match(preview.safety.confirmationCode, /^SHOPIFY-[A-F0-9]{8}$/);
+
+  await assert.rejects(
+    () => applyShopifyShippingRatesUpdate({
+      profileId,
+      updates: [{ ...updates[0]!, priceAmount: 10.42 }],
+      confirmationCode: preview.safety.confirmationCode,
+      confirmationToken: preview.confirmationToken,
+    }),
+    /does not match/,
+  );
+
+  const applied = await applyShopifyShippingRatesUpdate({
+    profileId,
+    updates,
+    confirmationCode: preview.safety.confirmationCode,
+    confirmationToken: preview.confirmationToken,
+  });
+  assert.equal(applied.applied, true);
+  assert.deepEqual(applied.updatedMethodDefinitionIds, [methodDefinitionId]);
+  assert.equal(applied.recoverySnapshot[0].rateProvider.price.amount, '8.95');
+  assert.equal(mutationCount, 1);
 });
 
 test('reads themes and requires an exact preview before writing only PDP files to an unpublished theme', async (context) => {
