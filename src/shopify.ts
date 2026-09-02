@@ -100,6 +100,90 @@ type ShopifyCollectionPublicationConfirmation = {
   expiresAt: string;
 };
 
+export type ShopifyShippingRateWeightRange = {
+  min: number;
+  max?: number | null;
+};
+
+export type ShopifyShippingRateUpdateInput = {
+  locationGroupId: string;
+  zoneId: string;
+  methodDefinitionId: string;
+  name?: string;
+  description?: string;
+  active?: boolean;
+  priceAmount?: number;
+  currencyCode?: string;
+  weightRangeKg?: ShopifyShippingRateWeightRange;
+};
+
+type ShopifyShippingRateConfirmation = {
+  version: 1;
+  kind: 'shipping_rates';
+  shop: string;
+  profileId: string;
+  currentStateHash: string;
+  proposedUpdatesHash: string;
+  confirmationCode: string;
+  expiresAt: string;
+};
+
+type ShopifyDeliveryCondition = {
+  id: string;
+  field: string;
+  operator: string;
+  conditionCriteria:
+    | { __typename: 'Weight'; unit: string; value: number }
+    | { __typename: 'MoneyV2'; amount: string; currencyCode: string }
+    | { __typename: string; [key: string]: unknown };
+};
+
+type ShopifyDeliveryMethodDefinition = {
+  id: string;
+  name: string;
+  description?: string | null;
+  active: boolean;
+  rateProvider: {
+    __typename: string;
+    id?: string;
+    price?: { amount: string; currencyCode: string };
+  };
+  methodConditions: ShopifyDeliveryCondition[];
+};
+
+type ShopifyDeliveryProfile = {
+  id: string;
+  name: string;
+  default: boolean;
+  profileLocationGroups: Array<{
+    locationGroup: {
+      id: string;
+      locations: {
+        nodes: Array<{ id: string; name: string }>;
+        pageInfo: { hasNextPage: boolean };
+      };
+    };
+    locationGroupZones: {
+      nodes: Array<{
+        zone: {
+          id: string;
+          name: string;
+          countries: Array<{
+            name: string;
+            code: { countryCode?: string | null; restOfWorld: boolean };
+            provinces: Array<{ name: string; code: string }>;
+          }>;
+        };
+        methodDefinitions: {
+          nodes: ShopifyDeliveryMethodDefinition[];
+          pageInfo: { hasNextPage: boolean };
+        };
+      }>;
+      pageInfo: { hasNextPage: boolean };
+    };
+  }>;
+};
+
 type ShopifyThemeFileInput = {
   filename: string;
   content: string;
@@ -411,6 +495,53 @@ function verifyCollectionConfirmation(
   return payload;
 }
 
+function signShippingConfirmation(payload: ShopifyShippingRateConfirmation): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function verifyShippingConfirmation(token: string): ShopifyShippingRateConfirmation {
+  const [encoded, signature, extra] = token.split('.');
+  if (!encoded || !signature || extra) {
+    throw new Error('Invalid Shopify shipping confirmation token. Create a new preview.');
+  }
+  const expected = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest();
+  let received: Buffer;
+  try {
+    received = Buffer.from(signature, 'base64url');
+  } catch {
+    throw new Error('Invalid Shopify shipping confirmation token. Create a new preview.');
+  }
+  if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+    throw new Error('Invalid Shopify shipping confirmation token. Create a new preview.');
+  }
+
+  let payload: ShopifyShippingRateConfirmation;
+  try {
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('Invalid Shopify shipping confirmation token. Create a new preview.');
+  }
+  if (
+    payload.version !== 1
+    || payload.kind !== 'shipping_rates'
+    || typeof payload.shop !== 'string'
+    || typeof payload.profileId !== 'string'
+    || !/^[a-f0-9]{64}$/.test(payload.currentStateHash)
+    || !/^[a-f0-9]{64}$/.test(payload.proposedUpdatesHash)
+    || !/^SHOPIFY-[A-F0-9]{8}$/.test(payload.confirmationCode)
+    || typeof payload.expiresAt !== 'string'
+    || !Number.isFinite(Date.parse(payload.expiresAt))
+  ) {
+    throw new Error('Invalid Shopify shipping confirmation token. Create a new preview.');
+  }
+  if (Date.parse(payload.expiresAt) <= Date.now()) {
+    throw new Error('Shopify shipping confirmation expired. Create a new preview.');
+  }
+  return payload;
+}
+
 function signThemeConfirmation(payload: ShopifyThemeFileConfirmation): string {
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const signature = createHmac('sha256', config.ADMIN_TOKEN).update(encoded).digest('base64url');
@@ -717,6 +848,427 @@ export async function getShopifyShopOverview(): Promise<any> {
     apiVersion: SHOPIFY_API_VERSION,
     shop: data.shop,
     accessScopes: data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort(),
+  };
+}
+
+const SHOPIFY_DELIVERY_PROFILE_FIELDS = `
+  id
+  name
+  default
+  profileLocationGroups {
+    locationGroup {
+      id
+      locations(first: 100) {
+        nodes { id name }
+        pageInfo { hasNextPage }
+      }
+    }
+    locationGroupZones(first: 100) {
+      nodes {
+        zone {
+          id
+          name
+          countries {
+            name
+            code { countryCode restOfWorld }
+            provinces { name code }
+          }
+        }
+        methodDefinitions(first: 250) {
+          nodes {
+            id
+            name
+            description
+            active
+            rateProvider {
+              __typename
+              ... on DeliveryRateDefinition {
+                id
+                price { amount currencyCode }
+              }
+            }
+            methodConditions {
+              id
+              field
+              operator
+              conditionCriteria {
+                __typename
+                ... on MoneyV2 { amount currencyCode }
+                ... on Weight { unit value }
+              }
+            }
+          }
+          pageInfo { hasNextPage }
+        }
+      }
+      pageInfo { hasNextPage }
+    }
+  }
+`;
+
+function assertCompleteShopifyDeliveryProfile(profile: ShopifyDeliveryProfile): void {
+  for (const group of profile.profileLocationGroups) {
+    if (group.locationGroup.locations.pageInfo.hasNextPage) {
+      throw new Error(`Shopify delivery location group ${group.locationGroup.id} has more than 100 locations; refusing an incomplete shipping snapshot.`);
+    }
+    if (group.locationGroupZones.pageInfo.hasNextPage) {
+      throw new Error(`Shopify delivery location group ${group.locationGroup.id} has more than 100 zones; refusing an incomplete shipping snapshot.`);
+    }
+    for (const { zone, methodDefinitions } of group.locationGroupZones.nodes) {
+      if (methodDefinitions.pageInfo.hasNextPage) {
+        throw new Error(`Shopify delivery zone ${zone.id} has more than 250 methods; refusing an incomplete shipping snapshot.`);
+      }
+    }
+  }
+}
+
+function normalizeShopifyDeliveryProfile(profile: ShopifyDeliveryProfile): ShopifyDeliveryProfile {
+  return {
+    ...profile,
+    profileLocationGroups: profile.profileLocationGroups
+      .map((group) => ({
+        locationGroup: {
+          ...group.locationGroup,
+          locations: {
+            ...group.locationGroup.locations,
+            nodes: [...group.locationGroup.locations.nodes].sort((a, b) => a.id.localeCompare(b.id)),
+          },
+        },
+        locationGroupZones: {
+          ...group.locationGroupZones,
+          nodes: group.locationGroupZones.nodes
+            .map(({ zone, methodDefinitions }) => ({
+              zone: {
+                ...zone,
+                countries: [...zone.countries]
+                  .map((country) => ({
+                    ...country,
+                    provinces: [...country.provinces].sort((a, b) => a.code.localeCompare(b.code)),
+                  }))
+                  .sort((a, b) => `${a.code.countryCode ?? ''}:${a.code.restOfWorld}`.localeCompare(`${b.code.countryCode ?? ''}:${b.code.restOfWorld}`)),
+              },
+              methodDefinitions: {
+                ...methodDefinitions,
+                nodes: methodDefinitions.nodes
+                  .map((method) => ({
+                    ...method,
+                    methodConditions: [...method.methodConditions].sort((a, b) => a.id.localeCompare(b.id)),
+                  }))
+                  .sort((a, b) => a.id.localeCompare(b.id)),
+              },
+            }))
+            .sort((a, b) => a.zone.id.localeCompare(b.zone.id)),
+        },
+      }))
+      .sort((a, b) => a.locationGroup.id.localeCompare(b.locationGroup.id)),
+  };
+}
+
+export async function getShopifyShippingProfiles(input: {
+  merchantOwnedOnly?: boolean;
+  limit?: number;
+  pageToken?: string;
+} = {}): Promise<any> {
+  const first = Math.min(Math.max(input.limit ?? 20, 1), 50);
+  const data = await shopifyGraphql<{
+    deliveryProfiles: {
+      nodes: ShopifyDeliveryProfile[];
+      pageInfo: { hasNextPage: boolean; endCursor?: string };
+    };
+    currentAppInstallation: { accessScopes: Array<{ handle: string }> };
+  }>(`query ShopifyShippingProfiles($first: Int!, $after: String, $merchantOwnedOnly: Boolean) {
+    deliveryProfiles(first: $first, after: $after, merchantOwnedOnly: $merchantOwnedOnly) {
+      nodes { ${SHOPIFY_DELIVERY_PROFILE_FIELDS} }
+      pageInfo { hasNextPage endCursor }
+    }
+    currentAppInstallation { accessScopes { handle } }
+  }`, {
+    first,
+    after: input.pageToken,
+    merchantOwnedOnly: input.merchantOwnedOnly ?? true,
+  });
+  const accessScopes = data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort();
+  if (!accessScopes.includes('read_shipping') && !accessScopes.includes('write_shipping')) {
+    throw new Error('Shopify read_shipping or write_shipping access is required.');
+  }
+  const profiles = data.deliveryProfiles.nodes.map((profile) => {
+    assertCompleteShopifyDeliveryProfile(profile);
+    return normalizeShopifyDeliveryProfile(profile);
+  });
+  return {
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    accessScopes,
+    profiles,
+    nextPageToken: data.deliveryProfiles.pageInfo.hasNextPage
+      ? data.deliveryProfiles.pageInfo.endCursor
+      : undefined,
+  };
+}
+
+async function getShopifyShippingProfileForWrite(profileId: string): Promise<{
+  profile: ShopifyDeliveryProfile;
+  accessScopes: string[];
+}> {
+  const data = await shopifyGraphql<{
+    deliveryProfile?: ShopifyDeliveryProfile | null;
+    currentAppInstallation: { accessScopes: Array<{ handle: string }> };
+  }>(`query ShopifyShippingProfileForWrite($id: ID!) {
+    deliveryProfile(id: $id) { ${SHOPIFY_DELIVERY_PROFILE_FIELDS} }
+    currentAppInstallation { accessScopes { handle } }
+  }`, { id: profileId });
+  if (!data.deliveryProfile) throw new Error(`Shopify delivery profile not found: ${profileId}`);
+  const accessScopes = data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort();
+  if (!accessScopes.includes('write_shipping')) {
+    throw new Error('Shopify write_shipping access is required to preview or apply shipping-rate changes.');
+  }
+  assertCompleteShopifyDeliveryProfile(data.deliveryProfile);
+  return {
+    profile: normalizeShopifyDeliveryProfile(data.deliveryProfile),
+    accessScopes,
+  };
+}
+
+function normalizeShopifyShippingRateUpdates(
+  profile: ShopifyDeliveryProfile,
+  updates: ShopifyShippingRateUpdateInput[],
+): Array<ShopifyShippingRateUpdateInput & {
+  name?: string;
+  currencyCode?: string;
+  priceAmount?: number;
+}> {
+  if (!updates.length || updates.length > 50) {
+    throw new Error('Provide between 1 and 50 Shopify shipping-rate updates.');
+  }
+  const seen = new Set<string>();
+  return updates.map((raw) => {
+    if (seen.has(raw.methodDefinitionId)) {
+      throw new Error(`Duplicate Shopify delivery method update: ${raw.methodDefinitionId}`);
+    }
+    seen.add(raw.methodDefinitionId);
+    const group = profile.profileLocationGroups.find(({ locationGroup }) => locationGroup.id === raw.locationGroupId);
+    if (!group) throw new Error(`Shopify delivery location group not found in profile: ${raw.locationGroupId}`);
+    const groupZone = group.locationGroupZones.nodes.find(({ zone }) => zone.id === raw.zoneId);
+    if (!groupZone) throw new Error(`Shopify delivery zone not found in location group: ${raw.zoneId}`);
+    const method = groupZone.methodDefinitions.nodes.find(({ id }) => id === raw.methodDefinitionId);
+    if (!method) throw new Error(`Shopify delivery method not found in zone: ${raw.methodDefinitionId}`);
+    if (method.rateProvider.__typename !== 'DeliveryRateDefinition' || !method.rateProvider.price) {
+      throw new Error(`Shopify delivery method is not a merchant-defined flat rate and cannot be changed: ${raw.methodDefinitionId}`);
+    }
+    const update: ShopifyShippingRateUpdateInput = {
+      locationGroupId: raw.locationGroupId,
+      zoneId: raw.zoneId,
+      methodDefinitionId: raw.methodDefinitionId,
+    };
+    if (raw.name !== undefined) {
+      update.name = raw.name.trim();
+      if (!update.name) throw new Error(`Shopify shipping-rate name cannot be blank: ${raw.methodDefinitionId}`);
+    }
+    if (raw.description !== undefined) update.description = raw.description;
+    if (raw.active !== undefined) update.active = raw.active;
+    if (raw.priceAmount !== undefined) {
+      if (!Number.isFinite(raw.priceAmount) || raw.priceAmount < 0 || raw.priceAmount > 1_000_000) {
+        throw new Error(`Invalid Shopify shipping price for ${raw.methodDefinitionId}.`);
+      }
+      update.priceAmount = Number(raw.priceAmount.toFixed(2));
+      update.currencyCode = (raw.currencyCode ?? method.rateProvider.price.currencyCode).toUpperCase();
+      if (!/^[A-Z]{3}$/.test(update.currencyCode)) {
+        throw new Error(`Invalid Shopify shipping currency for ${raw.methodDefinitionId}.`);
+      }
+    } else if (raw.currencyCode !== undefined) {
+      throw new Error(`A Shopify shipping currency requires priceAmount: ${raw.methodDefinitionId}`);
+    }
+    if (raw.weightRangeKg !== undefined) {
+      const min = raw.weightRangeKg.min;
+      const max = raw.weightRangeKg.max;
+      if (!Number.isFinite(min) || min < 0 || (max !== undefined && max !== null && (!Number.isFinite(max) || max < min))) {
+        throw new Error(`Invalid Shopify shipping weight range for ${raw.methodDefinitionId}.`);
+      }
+      update.weightRangeKg = { min, ...(max !== undefined ? { max } : {}) };
+    }
+    if (Object.keys(update).length === 3) {
+      throw new Error(`Shopify shipping-rate update has no changed fields: ${raw.methodDefinitionId}`);
+    }
+    return update;
+  }).sort((a, b) => a.methodDefinitionId.localeCompare(b.methodDefinitionId));
+}
+
+function findShopifyDeliveryMethod(
+  profile: ShopifyDeliveryProfile,
+  update: ShopifyShippingRateUpdateInput,
+): ShopifyDeliveryMethodDefinition {
+  return profile.profileLocationGroups
+    .find(({ locationGroup }) => locationGroup.id === update.locationGroupId)!
+    .locationGroupZones.nodes.find(({ zone }) => zone.id === update.zoneId)!
+    .methodDefinitions.nodes.find(({ id }) => id === update.methodDefinitionId)!;
+}
+
+function summarizeShopifyDeliveryMethod(method: ShopifyDeliveryMethodDefinition): Record<string, unknown> {
+  return {
+    id: method.id,
+    name: method.name,
+    description: method.description ?? null,
+    active: method.active,
+    rateProvider: method.rateProvider,
+    conditions: method.methodConditions,
+  };
+}
+
+function buildShopifyShippingRateMutationInput(
+  profile: ShopifyDeliveryProfile,
+  updates: ShopifyShippingRateUpdateInput[],
+): { profile: Record<string, unknown>; changes: Array<Record<string, unknown>> } {
+  const groups = new Map<string, Map<string, Array<Record<string, unknown>>>>();
+  const conditionsToDelete = new Set<string>();
+  const changes: Array<Record<string, unknown>> = [];
+
+  for (const update of updates) {
+    const current = findShopifyDeliveryMethod(profile, update);
+    const methodUpdate: Record<string, unknown> = { id: update.methodDefinitionId };
+    if (update.name !== undefined) methodUpdate.name = update.name;
+    if (update.description !== undefined) methodUpdate.description = update.description;
+    if (update.active !== undefined) methodUpdate.active = update.active;
+    if (update.priceAmount !== undefined) {
+      methodUpdate.rateDefinition = {
+        id: current.rateProvider.id,
+        price: {
+          amount: update.priceAmount.toFixed(2),
+          currencyCode: update.currencyCode,
+        },
+      };
+    }
+    if (update.weightRangeKg !== undefined) {
+      for (const condition of current.methodConditions) {
+        if (condition.field === 'TOTAL_WEIGHT') conditionsToDelete.add(condition.id);
+      }
+      methodUpdate.weightConditionsToCreate = [
+        {
+          operator: 'GREATER_THAN_OR_EQUAL_TO',
+          criteria: { unit: 'KILOGRAMS', value: update.weightRangeKg.min },
+        },
+        ...(update.weightRangeKg.max === undefined || update.weightRangeKg.max === null
+          ? []
+          : [{
+            operator: 'LESS_THAN_OR_EQUAL_TO',
+            criteria: { unit: 'KILOGRAMS', value: update.weightRangeKg.max },
+          }]),
+      ];
+    }
+    const zones = groups.get(update.locationGroupId) ?? new Map<string, Array<Record<string, unknown>>>();
+    groups.set(update.locationGroupId, zones);
+    const methods = zones.get(update.zoneId) ?? [];
+    zones.set(update.zoneId, methods);
+    methods.push(methodUpdate);
+    changes.push({
+      locationGroupId: update.locationGroupId,
+      zoneId: update.zoneId,
+      current: summarizeShopifyDeliveryMethod(current),
+      proposed: update,
+    });
+  }
+
+  return {
+    profile: {
+      locationGroupsToUpdate: [...groups.entries()].map(([id, zones]) => ({
+        id,
+        zonesToUpdate: [...zones.entries()].map(([zoneId, methodDefinitionsToUpdate]) => ({
+          id: zoneId,
+          methodDefinitionsToUpdate,
+        })),
+      })),
+      ...(conditionsToDelete.size ? { conditionsToDelete: [...conditionsToDelete].sort() } : {}),
+    },
+    changes,
+  };
+}
+
+export async function previewShopifyShippingRatesUpdate(input: {
+  profileId: string;
+  updates: ShopifyShippingRateUpdateInput[];
+}): Promise<any> {
+  const { profile, accessScopes } = await getShopifyShippingProfileForWrite(input.profileId);
+  const updates = normalizeShopifyShippingRateUpdates(profile, input.updates);
+  const built = buildShopifyShippingRateMutationInput(profile, updates);
+  const confirmationCode = `SHOPIFY-${randomBytes(4).toString('hex').toUpperCase()}`;
+  const expiresAt = new Date(Date.now() + SHOPIFY_WRITE_CONFIRMATION_TTL_MS).toISOString();
+  const confirmation: ShopifyShippingRateConfirmation = {
+    version: 1,
+    kind: 'shipping_rates',
+    shop: getCredentials().shop,
+    profileId: profile.id,
+    currentStateHash: sha256(JSON.stringify(profile)),
+    proposedUpdatesHash: sha256(JSON.stringify(updates)),
+    confirmationCode,
+    expiresAt,
+  };
+  return {
+    dryRun: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop: getCredentials().shop,
+    profile: { id: profile.id, name: profile.name, default: profile.default },
+    changes: built.changes,
+    safety: {
+      accessScopes,
+      touchesOnly: ['existing merchant-defined shipping rates'],
+      confirmationCode,
+      expiresAt,
+      instruction: `Show this preview to the user. Apply it only after the user explicitly replies with ${confirmationCode}.`,
+    },
+    confirmationToken: signShippingConfirmation(confirmation),
+  };
+}
+
+export async function applyShopifyShippingRatesUpdate(input: {
+  profileId: string;
+  updates: ShopifyShippingRateUpdateInput[];
+  confirmationCode: string;
+  confirmationToken: string;
+}): Promise<any> {
+  const confirmation = verifyShippingConfirmation(input.confirmationToken);
+  const { profile } = await getShopifyShippingProfileForWrite(input.profileId);
+  const updates = normalizeShopifyShippingRateUpdates(profile, input.updates);
+  const { shop } = getCredentials();
+  if (
+    confirmation.shop !== shop
+    || confirmation.profileId !== input.profileId
+    || confirmation.confirmationCode !== input.confirmationCode
+    || confirmation.proposedUpdatesHash !== sha256(JSON.stringify(updates))
+  ) {
+    throw new Error('Shopify confirmation does not match this shipping-rate update. Create a new preview.');
+  }
+  if (confirmation.currentStateHash !== sha256(JSON.stringify(profile))) {
+    throw new Error('The Shopify shipping profile changed after the preview. Review it and create a new preview.');
+  }
+  const built = buildShopifyShippingRateMutationInput(profile, updates);
+  const data = await shopifyGraphql<{
+    deliveryProfileUpdate: {
+      profile?: { id: string; name: string } | null;
+      userErrors: Array<{ field?: string[] | null; message: string }>;
+    };
+  }>(`mutation ShopifyShippingRatesUpdate($id: ID!, $profile: DeliveryProfileInput!) {
+    deliveryProfileUpdate(id: $id, profile: $profile) {
+      profile { id name }
+      userErrors { field message }
+    }
+  }`, { id: input.profileId, profile: built.profile });
+  if (data.deliveryProfileUpdate.userErrors.length) {
+    throw new Error(`Shopify rejected the shipping-rate update: ${JSON.stringify(data.deliveryProfileUpdate.userErrors)}`);
+  }
+  if (!data.deliveryProfileUpdate.profile) throw new Error('Shopify did not return the updated delivery profile.');
+
+  console.info(JSON.stringify({
+    event: 'shopify_shipping_rates_updated',
+    shop,
+    profileId: input.profileId,
+    methodDefinitionIds: updates.map(({ methodDefinitionId }) => methodDefinitionId),
+  }));
+  return {
+    applied: true,
+    apiVersion: SHOPIFY_API_VERSION,
+    shop,
+    profile: data.deliveryProfileUpdate.profile,
+    updatedMethodDefinitionIds: updates.map(({ methodDefinitionId }) => methodDefinitionId),
+    recoverySnapshot: built.changes.map(({ current }) => current),
   };
 }
 

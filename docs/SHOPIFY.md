@@ -21,6 +21,10 @@ Configure these app scopes:
 - `read_themes` for listing themes and reading selected PDP theme files
 - `write_themes` for guarded PDP file updates on unpublished themes only; Shopify
   must also grant the app an exemption for theme-file modification
+- `read_shipping` for reading delivery profiles, location groups, zones, rates,
+  and weight conditions
+- `write_shipping` for guarded updates to existing merchant-defined shipping
+  rates through `deliveryProfileUpdate`
 - `read_all_orders` when historical order analysis beyond 60 days is needed and
   Shopify has granted access
 
@@ -77,6 +81,16 @@ curl -fsS http://127.0.0.1:8000/health
 
 - `get_shopify_shop_overview`: verifies authentication, reports shop metadata,
   API version, and the scopes actually granted to the installed app.
+- `get_shopify_shipping_profiles`: reads merchant-owned delivery profiles and
+  returns fulfillment locations, geographic zones, merchant-defined flat-rate
+  prices, and all delivery conditions.
+- `preview_shopify_shipping_rates_update` and
+  `apply_shopify_shipping_rates_update`: preview and then update existing
+  merchant-defined rate prices, labels, active state, or kilogram weight bands.
+  The apply tool requires the exact short-lived confirmation code, rechecks the
+  complete delivery profile for concurrent changes, and calls only Shopify's
+  `deliveryProfileUpdate` mutation. It cannot create or delete profiles, zones,
+  location groups, carrier-calculated rates, or product assignments.
 - `list_shopify_themes`: lists Online Store themes and identifies live and
   unpublished roles.
 - `get_shopify_theme_files`: reads up to 20 selected PDP template, section,
@@ -132,6 +146,10 @@ manual collections and one add or remove action per preview. Collection publicat
 updates are bound to the exact selected sales channels and the publication state
 read during preview. Audit logs never contain confirmation tokens or description
 text. Successful metadata updates return the previous values as a recovery snapshot.
+Shipping-rate updates return the complete previous definition of each affected
+rate as a recovery snapshot. Replacing a weight band deletes only that method's
+existing `TOTAL_WEIGHT` conditions and recreates the explicitly previewed
+kilogram range; unrelated price conditions and other methods are preserved.
 Theme updates are additionally restricted to product JSON templates, sections,
 snippets, and CSS/JavaScript assets, with a maximum of 20 files and 500 KB per
 confirmed operation. Layout, configuration, locale, and non-PDP template files
@@ -167,3 +185,5 @@ when Shopify has not received the corresponding tracking event.
 12. `Liste alle Metaobject-Definitionen auf.`
 13. `Liste alle unveröffentlichten Shopify-Themes auf.`
 14. `Lies templates/product.json aus Theme <THEME_ID>.`
+15. `Liste die Shopify-Versandprofile mit Zonen, Preisen und Gewichtsbedingungen auf.`
+16. `Erstelle nur eine Vorschau für die Versandkostenänderungen im Profil <PROFILE_ID>.`

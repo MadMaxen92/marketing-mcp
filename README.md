@@ -28,9 +28,10 @@ tokens. Products, collections, sales channels, publication state, and metaobject
 can be read with narrowly scoped Shopify permissions. Product descriptions,
 collection metadata, manual collection membership, and collection publication
 state can be changed only through a preview plus an exact, short-lived confirmation
-code. PDP theme files can be read and updated only on an unpublished theme through
-the same guarded preview flow; the live theme is never writable. Prices, inventory,
-automated collection rules, and metaobjects remain read-only. See
+code. Existing merchant-defined shipping prices and kilogram weight bands use the
+same guarded preview flow through Shopify delivery profiles. PDP theme files can be
+read and updated only on an unpublished theme; the live theme is never writable.
+Product prices, inventory, automated collection rules, and metaobjects remain read-only. See
 [docs/SHOPIFY.md](docs/SHOPIFY.md).
 
 > Never commit `.env` files, OAuth client secrets, refresh tokens, or private keys.

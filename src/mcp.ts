@@ -31,6 +31,7 @@ import {
 import { readStore } from './token-store.js';
 import { MARKETING_MCP_VERSION } from './version.js';
 import {
+  applyShopifyShippingRatesUpdate,
   applyShopifyCollectionProductsUpdate,
   applyShopifyCollectionPublicationUpdate,
   applyShopifyCollectionUpdate,
@@ -40,6 +41,7 @@ import {
   getShopifyCollectionPublicationStatus,
   getShopifyMetaobject,
   getShopifySalesOverview,
+  getShopifyShippingProfiles,
   getShopifyShopOverview,
   getShopifyThemeFiles,
   listShopifyOrderDeliveryDetails,
@@ -53,6 +55,7 @@ import {
   previewShopifyCollectionPublicationUpdate,
   previewShopifyCollectionUpdate,
   previewShopifyProductDescriptionUpdate,
+  previewShopifyShippingRatesUpdate,
   previewShopifyThemeFilesUpsert,
 } from './shopify.js';
 
@@ -69,6 +72,21 @@ const SHOPIFY_COLLECTION_SORT_ORDERS = [
 ] as const;
 
 const SHOPIFY_THEME_ROLES = ['MAIN', 'UNPUBLISHED', 'DEVELOPMENT', 'DEMO'] as const;
+
+const SHOPIFY_SHIPPING_RATE_UPDATE_SCHEMA = z.object({
+  locationGroupId: z.string().regex(/^gid:\/\/shopify\/DeliveryLocationGroup\/\d+$/),
+  zoneId: z.string().regex(/^gid:\/\/shopify\/DeliveryZone\/\d+$/),
+  methodDefinitionId: z.string().regex(/^gid:\/\/shopify\/DeliveryMethodDefinition\/\d+$/),
+  name: z.string().trim().min(1).max(255).optional(),
+  description: z.string().max(1000).optional(),
+  active: z.boolean().optional(),
+  priceAmount: z.number().finite().min(0).max(1_000_000).optional(),
+  currencyCode: z.string().regex(/^[A-Z]{3}$/).optional(),
+  weightRangeKg: z.object({
+    min: z.number().finite().min(0),
+    max: z.number().finite().positive().nullable().optional(),
+  }).strict().optional(),
+}).strict();
 
 function result(value: unknown) {
   return {
@@ -327,6 +345,66 @@ export function createMarketingMcpServer(): McpServer {
     'Checks the read-only Shopify connection and returns non-sensitive shop details plus granted app scopes.',
     {},
     async () => result(await getShopifyShopOverview()),
+  );
+
+  server.registerTool(
+    'get_shopify_shipping_profiles',
+    {
+      title: 'Get Shopify shipping profiles',
+      description: 'Reads merchant-owned Shopify delivery profiles with fulfillment location groups, geographic zones, flat-rate prices, and weight conditions. Requires read_shipping or write_shipping and never writes.',
+      inputSchema: {
+        merchantOwnedOnly: z.boolean().default(true).describe('Keep true to exclude profiles managed by third-party apps.'),
+        limit: z.number().int().min(1).max(50).default(20),
+        pageToken: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (input) => result(await getShopifyShippingProfiles(input)),
+  );
+
+  server.registerTool(
+    'preview_shopify_shipping_rates_update',
+    {
+      title: 'Preview Shopify shipping-rate updates',
+      description: 'Creates a read-only preview for changing prices, names, active state, or kilogram weight bands on existing merchant-defined Shopify rates. It never writes; use returned IDs from get_shopify_shipping_profiles.',
+      inputSchema: {
+        profileId: z.string().regex(/^gid:\/\/shopify\/DeliveryProfile\/\d+$/),
+        updates: z.array(SHOPIFY_SHIPPING_RATE_UPDATE_SCHEMA).min(1).max(50),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (input) => result(await previewShopifyShippingRatesUpdate(input)),
+  );
+
+  server.registerTool(
+    'apply_shopify_shipping_rates_update',
+    {
+      title: 'Apply Shopify shipping-rate updates',
+      description: 'Applies exactly one previewed batch of updates to existing merchant-defined Shopify shipping rates through deliveryProfileUpdate. Call only after showing the complete preview and the user explicitly replies with its exact SHOPIFY confirmation code. Rejects altered, expired, or stale previews.',
+      inputSchema: {
+        profileId: z.string().regex(/^gid:\/\/shopify\/DeliveryProfile\/\d+$/),
+        updates: z.array(SHOPIFY_SHIPPING_RATE_UPDATE_SCHEMA).min(1).max(50),
+        confirmationCode: z.string().regex(/^SHOPIFY-[A-F0-9]{8}$/),
+        confirmationToken: z.string().min(80).max(20000),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (input) => result(await applyShopifyShippingRatesUpdate(input)),
   );
 
   server.tool(
