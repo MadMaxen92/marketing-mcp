@@ -35,6 +35,8 @@ openssl rand -hex 32  # TOKEN_ENCRYPTION_KEY
 ```
 
 Enter the Google OAuth client ID and client secret in `.env`. Never commit `.env`.
+Add `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` from the DataForSEO API Access
+page when enabling the DataForSEO tools.
 
 ## 2. Build and start
 
@@ -95,6 +97,8 @@ Start with these tool calls:
 4. `get_search_console_performance`
 5. `get_ecommerce_overview`
 6. `get_landing_page_performance`
+7. `get_dataforseo_account_status`
+8. `list_dataforseo_locations`
 
 ## Operations
 

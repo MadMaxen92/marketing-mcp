@@ -22,3 +22,9 @@
 - Encrypted multi-account refresh-token storage.
 - GA4 property discovery and read-only reporting tools.
 - Docker, Nginx, CI, security, deployment, and ChatGPT Work documentation.
+# 0.11.0
+
+- Added server-side DataForSEO API credentials.
+- Added free account-status and location/language tools.
+- Added capped paid tools for Google keyword volumes, keyword ideas, domain ranked
+  keywords, and live organic SERPs; each reports its actual DataForSEO cost.

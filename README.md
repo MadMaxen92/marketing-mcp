@@ -9,6 +9,7 @@ Initial scope:
 - Google Ads via Google Ads API
 - Google Merchant Center via Merchant API v1
 - Shopify orders and products via GraphQL Admin API
+- DataForSEO keyword research, domain rankings, and live Google SERPs
 - Remote MCP over HTTP
 - Docker deployment on Hetzner
 - Nginx reverse proxy
@@ -33,5 +34,11 @@ same guarded preview flow through Shopify delivery profiles. PDP theme files can
 read and updated only on an unpublished theme; the live theme is never writable.
 Product prices, inventory, automated collection rules, and metaobjects remain read-only. See
 [docs/SHOPIFY.md](docs/SHOPIFY.md).
+
+DataForSEO uses the account's API login and password through server-side Basic
+authentication. The integration includes free connection/location checks plus capped,
+read-only paid calls for Google keyword volumes, keyword ideas, ranked keywords, and
+live organic SERPs. Every paid result reports the actual DataForSEO cost. See
+[docs/DATAFORSEO.md](docs/DATAFORSEO.md).
 
 > Never commit `.env` files, OAuth client secrets, refresh tokens, or private keys.
