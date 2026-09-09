@@ -27,6 +27,11 @@ Authentication has two separate layers:
 The first release is stateless at the MCP transport layer. Each MCP request creates a fresh server and transport, while Google account connections persist in the encrypted file store.
 
 GA4, Google Ads, Merchant Center, and Search Console share the same Google OAuth connection.
+Google Ads writes are isolated to a two-step preview/apply flow for
+`conversion_action.primary_for_goal` on existing enabled purchase actions. The
+preview calls the mutate endpoint with `validateOnly`, then signs the expected
+action state, requested boolean, connection, customer, and expiry. Apply refuses
+stale or altered input and verifies the action again after mutation.
 Merchant Center calls use the stable Merchant API v1 endpoints for accounts,
 reports, products, and issue resolution. No legacy Content API for Shopping
 endpoint is used.

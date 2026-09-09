@@ -23,6 +23,10 @@ scopes. Search Console uses the least-privilege
 service-account key is required. The Merchant scope is not
 read-only at OAuth level, so the server enforces read-only behavior by exposing
 only GET/report operations and by validating custom MCQL as a single `SELECT`.
+The Google Ads `adwords` scope already covers the guarded conversion-action write
+path; no additional OAuth scope is required. The server permits only
+`conversion_action.primary_for_goal` changes after validate-only preview and exact
+confirmation.
 
 After adding Merchant Center or Search Console to an existing deployment,
 reconnect every stored Google account at `/connect/google?admin_token=...`.
