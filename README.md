@@ -6,7 +6,7 @@ Initial scope:
 
 - Google Analytics 4 via Google OAuth 2.0
 - Google Search Console performance via read-only Google OAuth 2.0
-- Google Ads via Google Ads API
+- Google Ads reporting plus guarded purchase-conversion Primary/Secondary updates via Google Ads API
 - Google Merchant Center via Merchant API v1
 - Shopify orders and products via GraphQL Admin API
 - DataForSEO keyword research, domain rankings, and live Google SERPs
@@ -40,5 +40,11 @@ authentication. The integration includes free connection/location checks plus ca
 read-only paid calls for Google keyword volumes, keyword ideas, ranked keywords, and
 live organic SERPs. Every paid result reports the actual DataForSEO cost. See
 [docs/DATAFORSEO.md](docs/DATAFORSEO.md).
+
+Google Ads writes are restricted to `primary_for_goal` on an existing enabled
+purchase conversion action. A read-only `validateOnly` preview, signed expiring
+token, exact confirmation code, stale-state check, and post-write verification are
+required. Campaigns, budgets, bids, ads, conversion values/windows/status, and
+deletions remain unavailable.
 
 > Never commit `.env` files, OAuth client secrets, refresh tokens, or private keys.

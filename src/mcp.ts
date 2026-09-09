@@ -2,10 +2,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { listProperties, runReport } from './google.js';
 import {
+  applyGoogleAdsConversionPrimaryUpdate,
   getGoogleAdsAccountOverview,
   getGoogleAdsCampaignPerformance,
   getGoogleAdsSearchTerms,
   listGoogleAdsAccounts,
+  previewGoogleAdsConversionPrimaryUpdate,
   runGoogleAdsQuery,
 } from './google-ads.js';
 import {
@@ -257,6 +259,50 @@ export function createMarketingMcpServer(): McpServer {
       query: z.string().min(6).max(12000).describe('Read-only GAQL SELECT query.'),
     },
     async (input) => result(await runGoogleAdsQuery(input)),
+  );
+
+  server.registerTool(
+    'preview_google_ads_conversion_primary_update',
+    {
+      title: 'Preview Google Ads purchase conversion Primary/Secondary update',
+      description: 'Validates and previews changing only primary_for_goal on one existing ENABLED PURCHASE conversion action. It never writes. The validation call uses Google Ads validateOnly and returns an expiring confirmation code and signed token.',
+      inputSchema: {
+        connectionId: z.string().optional().describe('Connection ID or Google email. Defaults to the first connection.'),
+        customerId: z.string().describe('10-digit Google Ads customer ID; hyphens are accepted.'),
+        conversionActionId: z.string().regex(/^\d+$/).describe('Numeric ID of an existing Google Ads conversion action.'),
+        primaryForGoal: z.boolean().describe('True makes the purchase action Primary; false makes it Secondary.'),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (input) => result(await previewGoogleAdsConversionPrimaryUpdate(input)),
+  );
+
+  server.registerTool(
+    'apply_google_ads_conversion_primary_update',
+    {
+      title: 'Apply Google Ads purchase conversion Primary/Secondary update',
+      description: 'Applies exactly one previewed primary_for_goal change to an existing ENABLED PURCHASE conversion action. Call only after showing the complete preview and the user explicitly replies with its exact GOOGLE-ADS confirmation code. It cannot change campaigns, budgets, bids, ads, values, windows, status, or delete data.',
+      inputSchema: {
+        connectionId: z.string().optional().describe('Must resolve to the same Google connection used by the preview.'),
+        customerId: z.string().describe('10-digit Google Ads customer ID; hyphens are accepted.'),
+        conversionActionId: z.string().regex(/^\d+$/),
+        primaryForGoal: z.boolean(),
+        confirmationCode: z.string().regex(/^GOOGLE-ADS-[A-F0-9]{8}$/),
+        confirmationToken: z.string().min(80).max(10000),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (input) => result(await applyGoogleAdsConversionPrimaryUpdate(input)),
   );
 
   server.tool(
