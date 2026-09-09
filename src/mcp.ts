@@ -31,6 +31,14 @@ import {
 import { readStore } from './token-store.js';
 import { MARKETING_MCP_VERSION } from './version.js';
 import {
+  getDataForSeoAccountStatus,
+  getDataForSeoKeywordIdeas,
+  getDataForSeoKeywordSearchVolume,
+  getDataForSeoOrganicSerp,
+  getDataForSeoRankedKeywords,
+  listDataForSeoLocations,
+} from './dataforseo.js';
+import {
   applyShopifyShippingRatesUpdate,
   applyShopifyCollectionProductsUpdate,
   applyShopifyCollectionPublicationUpdate,
@@ -338,6 +346,114 @@ export function createMarketingMcpServer(): McpServer {
       pageToken: z.string().optional(),
     },
     async (input) => result(await runMerchantCenterQuery(input)),
+  );
+
+  server.registerTool(
+    'get_dataforseo_account_status',
+    {
+      title: 'Get DataForSEO account status',
+      description: 'Checks the configured DataForSEO connection and returns balance and account limits. This endpoint is free and never exposes the API password.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async () => result(await getDataForSeoAccountStatus()),
+  );
+
+  server.registerTool(
+    'list_dataforseo_locations',
+    {
+      title: 'List DataForSEO locations and languages',
+      description: 'Lists supported country locations and languages for DataForSEO Labs. This endpoint is free.',
+      inputSchema: {
+        countryIsoCode: z.string().regex(/^[A-Za-z]{2}$/).optional().describe('Optional two-letter country code, for example GB or DE.'),
+        languageCode: z.string().regex(/^[A-Za-z-]{2,10}$/).optional().describe('Optional language code, for example en or de.'),
+        query: z.string().trim().min(1).max(100).optional().describe('Optional case-insensitive location-name search.'),
+        limit: z.number().int().min(1).max(1000).default(100),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async (input) => result(await listDataForSeoLocations(input)),
+  );
+
+  server.registerTool(
+    'get_dataforseo_keyword_search_volume',
+    {
+      title: 'Get DataForSEO keyword search volume',
+      description: 'Returns Google Ads search volume, monthly searches, competition, CPC, and bid ranges for up to 1,000 keywords. This is a paid live DataForSEO request and deducts its reported cost from the connected account balance.',
+      inputSchema: {
+        keywords: z.array(z.string().trim().min(1).max(80)).min(1).max(1000),
+        locationCode: z.number().int().positive().optional(),
+        locationName: z.string().trim().min(1).max(250).optional(),
+        languageCode: z.string().trim().min(1).max(10).optional(),
+        languageName: z.string().trim().min(1).max(100).optional(),
+        dateFrom: z.string().regex(/^\d{4}-\d{2}-01$/).optional().describe('Optional first month in YYYY-MM-01 format.'),
+        dateTo: z.string().regex(/^\d{4}-\d{2}-01$/).optional().describe('Optional last month in YYYY-MM-01 format.'),
+        searchPartners: z.boolean().default(false),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async (input) => result(await getDataForSeoKeywordSearchVolume(input)),
+  );
+
+  server.registerTool(
+    'get_dataforseo_keyword_ideas',
+    {
+      title: 'Get DataForSEO keyword ideas',
+      description: 'Finds related Google keyword ideas with search volume, CPC, competition, trend, and optional SERP data. This is a paid live DataForSEO request, capped at 100 results, and returns the exact account cost.',
+      inputSchema: {
+        keywords: z.array(z.string().trim().min(1).max(80)).min(1).max(200),
+        locationCode: z.number().int().positive().optional(),
+        locationName: z.string().trim().min(1).max(250).optional(),
+        languageCode: z.string().trim().min(1).max(10).optional(),
+        languageName: z.string().trim().min(1).max(100).optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+        offset: z.number().int().min(0).max(100000).default(0),
+        minSearchVolume: z.number().int().min(0).max(1000000000).optional(),
+        includeSerpInfo: z.boolean().default(false),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async (input) => result(await getDataForSeoKeywordIdeas(input)),
+  );
+
+  server.registerTool(
+    'get_dataforseo_ranked_keywords',
+    {
+      title: 'Get DataForSEO ranked keywords',
+      description: 'Lists Google organic keywords a domain, subdomain, or page ranks for, with rank and keyword metrics. This is a paid live DataForSEO request, capped at 100 results, and returns the exact account cost.',
+      inputSchema: {
+        target: z.string().trim().min(1).max(1000).describe('Domain without protocol/www, or a full page URL.'),
+        locationCode: z.number().int().positive().optional(),
+        locationName: z.string().trim().min(1).max(250).optional(),
+        languageCode: z.string().trim().min(1).max(10).optional(),
+        languageName: z.string().trim().min(1).max(100).optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+        offset: z.number().int().min(0).max(100000).default(0),
+        minSearchVolume: z.number().int().min(0).max(1000000000).optional(),
+        maxOrganicRank: z.number().int().min(1).max(100).optional(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async (input) => result(await getDataForSeoRankedKeywords(input)),
+  );
+
+  server.registerTool(
+    'get_dataforseo_google_organic_serp',
+    {
+      title: 'Get a live Google organic SERP from DataForSEO',
+      description: 'Returns a live Google organic results page with ranking positions and SERP features for one keyword. This is a paid live DataForSEO request, capped at depth 100, and returns the exact account cost.',
+      inputSchema: {
+        keyword: z.string().trim().min(1).max(700),
+        locationCode: z.number().int().positive().optional(),
+        locationName: z.string().trim().min(1).max(250).optional(),
+        languageCode: z.string().trim().min(1).max(10).optional(),
+        languageName: z.string().trim().min(1).max(100).optional(),
+        device: z.enum(['desktop', 'mobile']).default('desktop'),
+        depth: z.number().int().min(1).max(100).default(20),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async (input) => result(await getDataForSeoOrganicSerp(input)),
   );
 
   server.tool(

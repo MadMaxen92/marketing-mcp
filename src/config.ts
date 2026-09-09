@@ -18,6 +18,8 @@ const schema = z.object({
   SHOPIFY_SHOP: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).optional(),
   SHOPIFY_CLIENT_ID: z.string().min(8).optional(),
   SHOPIFY_CLIENT_SECRET: z.string().min(16).optional(),
+  DATAFORSEO_LOGIN: z.string().email().optional(),
+  DATAFORSEO_PASSWORD: z.string().min(8).optional(),
   TOKEN_STORE_PATH: z.string().default('/app/data/google-connections.enc'),
 });
 
