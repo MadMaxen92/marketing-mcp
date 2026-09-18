@@ -32,6 +32,7 @@ import {
 } from './search-console.js';
 import { readStore } from './token-store.js';
 import { MARKETING_MCP_VERSION } from './version.js';
+import { launchActionSchema, getShopifyLaunchCapabilities, previewShopifyLaunchPreparation, applyShopifyLaunchPreparation } from './shopify-launch.js';
 import {
   getDataForSeoAccountStatus,
   getDataForSeoKeywordIdeas,
@@ -106,6 +107,21 @@ function result(value: unknown) {
 
 export function createMarketingMcpServer(): McpServer {
   const server = new McpServer({ name: 'marketing-mcp', version: MARKETING_MCP_VERSION });
+
+  server.registerTool('get_shopify_launch_capabilities', {
+    description: 'Checks granted Shopify scopes and limitations for draft catalogue, unpublished collection, separate launch menu and theme-copy preparation.',
+    inputSchema: {}, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async () => result(await getShopifyLaunchCapabilities()));
+  server.registerTool('preview_shopify_launch_preparation', {
+    description: 'Read-only preview for creating one DRAFT product with ordered options, SKUs, prices, images and metafields; an unpublished manual collection; a separate launch- menu; or an unpublished theme copy. Does not edit existing resources or publish. Show the full preview before asking for its confirmation code.',
+    inputSchema: { action: launchActionSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, async ({ action }) => result(await previewShopifyLaunchPreparation(action)));
+  server.registerTool('apply_shopify_launch_preparation', {
+    description: 'Creates exactly the previewed Shopify preparation resource. Call only after showing the full preview and receiving the exact SHOPIFY confirmation code explicitly from the user. Refuses altered, stale, expired or replayed operations. Never publishes or edits existing products, menus or themes.',
+    inputSchema: { action: launchActionSchema, confirmationCode: z.string().regex(/^SHOPIFY-[A-F0-9]{8}$/), confirmationToken: z.string().min(80).max(10000) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async input => result(await applyShopifyLaunchPreparation(input)));
 
   server.tool(
     'list_google_connections',

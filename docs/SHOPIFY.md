@@ -10,7 +10,10 @@ Configure these app scopes:
 
 - `read_orders`
 - `read_products`
-- `write_products` for guarded product-description and collection update flows
+- `write_products` for guarded draft-product creation, unpublished collection
+  creation, product-description and collection update flows
+- `write_online_store_navigation` for creating separate launch menus (includes
+  read access); no existing menu editing or live-theme assignment is exposed
 - `read_product_listings` for detailed product publication data
 - `read_publications` and `write_publications` for guarded collection publication
   previews and updates
@@ -78,6 +81,71 @@ curl -fsS http://127.0.0.1:8000/health
 ```
 
 ## MCP tools
+
+- `get_shopify_launch_capabilities`: reports granted scopes and the limits of
+  launch preparation. Scopes alone do not prove Shopify theme exemption access.
+- `preview_shopify_launch_preparation` and `apply_shopify_launch_preparation`:
+  preview and create one launch resource using the existing exact-code
+  confirmation model. Supported actions:
+  - `CREATE_DRAFT_PRODUCT`: one DRAFT product, 1–3 ordered options (use Size then
+    Colour), up to 100 explicit variants with unique SKUs and prices, up to 20
+    images with variant associations, SEO, tags, template suffix and up to 30
+    product metafields. Inventory is tracked with no stock allocation and selling
+    when out of stock is disabled. No existing product/variant/file IDs accepted.
+  - `CREATE_UNPUBLISHED_COLLECTION`: a new manual collection with no publications,
+    optionally containing up to 100 existing DRAFT products. Existing guarded
+    membership tools can prepare larger collections in batches.
+  - `CREATE_LAUNCH_MENU`: new `launch-` handle, up to three nested levels of
+    store-relative links. Existing handles and default menus cannot be overwritten.
+    The new menu is not assigned to any theme. Custom storefront code that lists
+    all menus needs separate review before creating menus.
+  - `DUPLICATE_THEME`: copy a ready source theme into a new UNPUBLISHED theme.
+    The source's state must still match the preview. Requires Shopify theme API
+    approval as well as `write_themes`; no live-theme replacement is exposed.
+
+### Launch preparation operation safety
+
+Preview calls only read Shopify. Their signed ten-minute confirmations bind the
+shop, exact normalized input and source state. Apply requires the user to return
+the exact code after seeing the full preview. Unknown fields are rejected, not
+forwarded to Shopify. Apply rechecks access, handle collisions and source state.
+These tools do not use `productSet` to replace existing products, since omitted
+list entries could otherwise delete variants or metafields.
+
+Creation uses persistent, exclusive operation locks and receipts in
+`shopify-launch-operations/` beside `TOKEN_STORE_PATH`, on the existing data volume.
+An operation is keyed by shop and normalized input. A repeated successful apply
+returns the receipt; concurrent attempts and uncertain/failed attempts cannot
+automatically run the mutation again. Mutation requests have no automatic retry.
+Keep this directory across deploys and include it in data-volume backups. All
+replicas must share the volume; this is not a distributed lock implementation.
+
+For a failed/uncertain operation, inspect its receipt and Shopify by returned ID
+or expected handle/name before retrying. The lock intentionally survives failure
+and process restarts. Only an operator who has established whether Shopify created
+the resource should remove a lock/receipt. A new preview does not bypass the lock.
+Image processing can continue after creation; inspect media status and imagery
+before launch. Source images need publicly fetchable or signed HTTPS URLs; a
+private Google Drive viewer link is not suitable. Shopify may require additional
+file permissions for a future staged-upload tool; none is exposed here.
+
+Still separate: stock imports, existing draft variant editing, shared metaobject
+schema changes, assigning menus/homepage sections in an unpublished theme, channel
+publication and launch-day redirects. Existing PDP-file tools retain their current
+unpublished-theme restrictions. This release does not change those tools' scope.
+
+Deployment: update the Shopify app version to request
+`write_online_store_navigation`, release/install the permission update for the
+merchant store, deploy the server, then refresh the connector's tool list. Verify
+`get_shopify_launch_capabilities` before preparation. Do not create test products
+in the merchant store solely to prove write access.
+
+API references: [productSet](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/productSet),
+[collectionCreate](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/collectionCreate),
+[menuCreate](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/menuCreate),
+[themeDuplicate](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/themeDuplicate).
+
+### Existing tools
 
 - `get_shopify_shop_overview`: verifies authentication, reports shop metadata,
   API version, and the scopes actually granted to the installed app.
