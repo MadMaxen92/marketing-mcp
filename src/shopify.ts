@@ -358,7 +358,7 @@ async function getAccessToken(forceRefresh = false): Promise<string> {
   return cachedAccessToken;
 }
 
-async function shopifyGraphql<T>(query: string, variables: Record<string, unknown> = {}, retry = true): Promise<T> {
+export async function shopifyGraphql<T>(query: string, variables: Record<string, unknown> = {}, retry = true): Promise<T> {
   const { shop } = getCredentials();
   const response = await fetch(`https://${shop}.myshopify.com/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
     method: 'POST',
