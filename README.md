@@ -28,11 +28,16 @@ Shopify uses a merchant-owned Dev Dashboard app with short-lived client-credenti
 tokens. Products, collections, sales channels, publication state, and metaobjects
 can be read with narrowly scoped Shopify permissions. Product descriptions,
 collection metadata, manual collection membership, and collection publication
-state can be changed only through a preview plus an exact, short-lived confirmation
-code. Existing merchant-defined shipping prices and kilogram weight bands use the
-same guarded preview flow through Shopify delivery profiles. PDP theme files can be
-read and updated only on an unpublished theme; the live theme is never writable.
-Product prices, inventory, automated collection rules, and metaobjects remain read-only. See
+state retain their existing preview plus exact-confirmation tools. The advanced
+Shopify management tools cover every installed management area: full product and
+variant editing, product duplication/deletion, manual and automated collections,
+publication, files, inventory, locations, metaobjects and definitions, navigation,
+themes, shipping and delivery customizations. They discover the live API schema
+and granted scopes rather than assuming a fixed permission list. Every write
+requires a complete current-state preview, explicit expiring approval, stale-state
+check and readback; partial or uncertain writes are locked against automatic retry.
+Orders remain read-only and Shopify platform restrictions still apply. See
+[docs/SHOPIFY_ADMIN.md](docs/SHOPIFY_ADMIN.md) and the legacy workflows in
 [docs/SHOPIFY.md](docs/SHOPIFY.md).
 
 DataForSEO uses the account's API login and password through server-side Basic

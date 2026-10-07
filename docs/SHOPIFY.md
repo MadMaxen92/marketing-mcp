@@ -4,35 +4,45 @@ The Shopify integration is designed for one merchant-owned store. It uses the
 GraphQL Admin API `2026-07` and Shopify's client-credentials grant. Access tokens
 last 24 hours and are requested and cached by the service automatically.
 
+Version 0.14 adds schema-aware management across all granted Shopify areas. Use
+`get_shopify_capabilities` first and follow [SHOPIFY_ADMIN.md](SHOPIFY_ADMIN.md)
+for full product/variant, collection, file, stock, location, metaobject, menu,
+theme, publication, shipping and delivery-customization changes. The narrower
+tools described below remain available and keep their original restrictions.
+
 ## Data and privacy scope
 
 Configure these app scopes:
 
 - `read_orders`
 - `read_products`
-- `write_products` for guarded draft-product creation, unpublished collection
-  creation, product-description and collection update flows
-- `write_online_store_navigation` for creating separate launch menus (includes
-  read access); no existing menu editing or live-theme assignment is exposed
+- `write_products` for product/variant and collection management, including
+  creation, duplication, deletion, prices and automated collection rules
+- `write_online_store_navigation` for menus and URL redirects (includes read access)
 - `read_product_listings` for detailed product publication data
 - `read_publications` and `write_publications` for guarded collection publication
   previews and updates
 - `read_metaobject_definitions` and `read_metaobjects` for structured drop,
   design-family, and related-product data
-- `write_metaobject_definitions` and `write_metaobjects` are reserved for the
-  later schema rollout; the current MCP release exposes no Metaobject write tool
+- `write_metaobject_definitions` and `write_metaobjects` for schema and entry management
+- `read_files` and `write_files` for file/media management and staged uploads
+- `read_inventory` and `write_inventory` for stock and inventory-item management
+- `read_locations` and `write_locations` for location management
+- `read_delivery_customizations` and `write_delivery_customizations` for existing
+  Shopify Function-backed delivery customizations; this does not deploy new Functions
 - `read_themes` for listing themes and reading selected PDP theme files
-- `write_themes` for guarded PDP file updates on unpublished themes only; Shopify
+- `write_themes` for guarded theme management, including file changes; Shopify
   must also grant the app an exemption for theme-file modification
 - `read_shipping` for reading delivery profiles, location groups, zones, rates,
   and weight conditions
-- `write_shipping` for guarded updates to existing merchant-defined shipping
-  rates through `deliveryProfileUpdate`
+- `write_shipping` for guarded delivery-profile, shipping-rate and carrier-service management
 - `read_all_orders` when historical order analysis beyond 60 days is needed and
   Shopify has granted access
 
-Do not grant `read_customers`. The MCP tools intentionally request no customer
-names, email addresses, phone numbers, or postal addresses.
+The standard order-reporting tools request no customer names, email addresses,
+phone numbers, or postal addresses. Advanced read queries are constrained by the
+installed Shopify scopes and Shopify protected-data access; no new customer scope
+is required for the management features.
 
 `read_orders` normally covers the most recent 60 days. Access to older orders
 requires Shopify approval for `read_all_orders` in addition to `read_orders`.
