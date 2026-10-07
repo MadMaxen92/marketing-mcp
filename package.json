@@ -1,6 +1,6 @@
 {
   "name": "marketing-mcp",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -18,6 +18,7 @@
     "@modelcontextprotocol/sdk": "^1.17.0",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
+    "graphql": "^16.14.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

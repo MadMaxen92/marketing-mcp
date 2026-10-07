@@ -102,6 +102,27 @@ Start with these tool calls:
 
 ## Operations
 
+For the 0.14.0 Shopify management upgrade, first build a separate candidate image
+and verify its MCP tool registry and live Shopify scopes without catalogue writes:
+
+```bash
+docker build -t marketing-mcp-candidate .
+docker run --rm --env-file .env marketing-mcp-candidate node dist/shopify-check.js
+```
+
+The check prints version, shop, tool count and granted-area operation counts. It
+does not print credentials or mutate Shopify. Keep the previous image/commit for
+rollback and retain `.env` and `data/`. Upgrade only the `marketing-mcp` service:
+
+```bash
+docker compose up -d --build --no-deps marketing-mcp
+docker exec marketing-mcp node dist/shopify-check.js
+```
+
+Then refresh the client tool definitions as described in
+[CHATGPT_SETUP.md](CHATGPT_SETUP.md). No Shopify reinstallation or new scope is
+needed when the required scopes are already reported as granted.
+
 Update:
 
 ```bash
