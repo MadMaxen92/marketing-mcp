@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { getKeepaUkProduct, keepaAsinSchema } from './keepa.js';
 import { listProperties, runReport } from './google.js';
 import {
   applyGoogleAdsConversionPrimaryUpdate,
@@ -435,6 +436,18 @@ export function createMarketingMcpServer(): McpServer {
     },
     async (input) => result(await runMerchantCenterQuery(input)),
   );
+
+  server.registerTool('get_keepa_uk_product', {
+    title: 'Look up an Amazon UK product in Keepa',
+    description: 'Returns Keepa product identity, available variation links, GBP prices, offer count and sales rank for one UK ASIN. Consumes Keepa subscription tokens. Optional Buy Box and ratings data can use additional tokens. Historical price changes cover up to 90 days.',
+    inputSchema: {
+      asin: keepaAsinSchema,
+      includeBuyBox: z.boolean().default(false),
+      includeRatings: z.boolean().default(false),
+      includeHistory: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, async input => result(await getKeepaUkProduct(input)));
 
   server.registerTool(
     'get_dataforseo_account_status',

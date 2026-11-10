@@ -54,3 +54,12 @@ See [OpenAI's refresh instructions](https://developers.openai.com/plugins/deploy
 The existing ChatGPT connection is intended for Hub administrators. To connect
 teammates from Claude with individual reporting grants, use the separate
 [Claude team setup](CLAUDE_TEAM_SETUP.md).
+
+## Keepa for Amazon UK
+
+Set `KEEPA_API_KEY` in the Hub server's private `.env` and recreate the Hub
+container to load it. In the administrator connector, refresh the imported tools
+and use `get_keepa_uk_product` with one UK ASIN. It returns available variation
+links, observed GBP prices, offer count and category sales rank. Buy Box,
+ratings and price change history are optional. Keepa meters requests against
+the configured subscription and reports the token usage in the response.

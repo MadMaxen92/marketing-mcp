@@ -22,6 +22,7 @@ const schema = z.object({
   SHOPIFY_CLIENT_SECRET: z.string().min(16).optional(),
   DATAFORSEO_LOGIN: z.string().email().optional(),
   DATAFORSEO_PASSWORD: z.string().min(8).optional(),
+  KEEPA_API_KEY: z.string().trim().optional(),
   TOKEN_STORE_PATH: z.string().default('/app/data/google-connections.enc'),
 });
 
