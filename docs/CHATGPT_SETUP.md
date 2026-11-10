@@ -51,6 +51,6 @@ For a packaged/published plugin, update its imported tool definition/version as
 appropriate rather than repeatedly disconnecting Shopify authentication.
 See [OpenAI's refresh instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata).
 
-The same MCP tools can be used by another MCP client, including Claude, after the
-client has connected to the endpoint and refreshed its tool discovery. Existing
-authentication and installed Shopify scopes remain server-side.
+The existing ChatGPT connection is intended for Hub administrators. To connect
+teammates from Claude with individual reporting grants, use the separate
+[Claude team setup](CLAUDE_TEAM_SETUP.md).

@@ -1,5 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createClaudeRouter } from './claude-oauth.js';
+import { handleMcpRequest } from './mcp-http.js';
 import { config } from './config.js';
 import { beginGoogleOAuth, finishGoogleOAuth } from './google.js';
 import { createMarketingMcpServer } from './mcp.js';
@@ -35,21 +36,12 @@ app.get('/oauth/authorize', showAuthorizationPage);
 app.post('/oauth/authorize', approveAuthorization);
 app.post('/oauth/token', exchangeToken);
 
-app.all('/mcp', requireMcpOAuth, async (req, res, next) => {
-  const server = createMarketingMcpServer();
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  try {
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (error) {
-    next(error);
-  } finally {
-    res.on('close', () => {
-      transport.close().catch(() => undefined);
-      server.close().catch(() => undefined);
-    });
-  }
-});
+app.all('/mcp', requireMcpOAuth, (req, res, next) =>
+  handleMcpRequest(createMarketingMcpServer(), req, res, next));
+
+if (config.CLAUDE_OAUTH_CLIENT_ID && config.CLAUDE_OAUTH_CLIENT_SECRET) {
+  app.use(createClaudeRouter(config.CLAUDE_OAUTH_CLIENT_ID, config.CLAUDE_OAUTH_CLIENT_SECRET));
+}
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(error);
