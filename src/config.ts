@@ -15,6 +15,8 @@ const schema = z.object({
   CHATGPT_OAUTH_CLIENT_ID: z.string().min(16),
   CHATGPT_OAUTH_CLIENT_SECRET: z.string().min(32),
   CHATGPT_OAUTH_REDIRECT_URI: z.string().url(),
+  CLAUDE_OAUTH_CLIENT_ID: z.string().min(16).optional(),
+  CLAUDE_OAUTH_CLIENT_SECRET: z.string().min(32).optional(),
   SHOPIFY_SHOP: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).optional(),
   SHOPIFY_CLIENT_ID: z.string().min(8).optional(),
   SHOPIFY_CLIENT_SECRET: z.string().min(16).optional(),
