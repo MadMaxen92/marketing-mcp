@@ -130,7 +130,9 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
       // A retry or a second tab must not replace another pending flow's proof.
       res.cookie(cookiePrefix + flow, browserProof, { ...cookieOptions, maxAge: flowLifetimeMs });
       res.set({
-        'Content-Security-Policy': "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        // Chromium also checks the redirect after a successful form submission.
+        // Keep the password POST same-origin and allow only the fixed Claude callback.
+        'Content-Security-Policy': `default-src 'none'; form-action 'self' ${callback}; base-uri 'none'; frame-ancestors 'none'`,
         'Referrer-Policy': 'no-referrer',
       });
       res.type('html').send(`<!doctype html>
@@ -230,6 +232,7 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
     const redirect = new URL(flow.params.redirectUri);
     redirect.searchParams.set('code', code);
     redirect.searchParams.set('state', flow.params.state);
+    console.info(JSON.stringify({ event: 'claude_signin_redirect' }));
     res.redirect(303, redirect.href);
   });
 

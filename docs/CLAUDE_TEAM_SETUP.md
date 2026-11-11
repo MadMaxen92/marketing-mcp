@@ -117,3 +117,10 @@ page. Each flow remains limited to ten minutes and one successful submission;
 its cookie is cleared independently. A missing or mismatched browser cookie
 gets a distinct message rather than being labelled as an expired link.
 Rejection logs contain only a reason code, never credentials or flow values.
+
+The sign-in page's form-action policy allows the Hub and only the fixed Claude
+callback URL. Chromium applies this directive to redirects after form submission,
+so restricting it to self blocks completion after the password was accepted.
+The password form action remains the Hub's own login endpoint; the callback
+receives only the one-time code and original state through the 303 redirect.
+The OAuth client still rejects every other redirect URI.
