@@ -23,7 +23,7 @@ const scopes = [scope, writeScope, 'offline_access'];
 const flowLifetimeMs = 10 * 60_000;
 const accessLifetimeSeconds = 3600;
 const refreshLifetimeSeconds = 30 * 24 * 3600;
-const cookieName = 'hub_claude_signin';
+const cookiePrefix = 'hub_claude_signin_';
 const cookieOptions = { httpOnly: true, secure: true, sameSite: 'lax', path: loginPath } as const;
 const randomSecret = () => randomBytes(32).toString('base64url');
 const now = () => Math.floor(Date.now() / 1000);
@@ -127,7 +127,8 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
       const flow = savePending(flows, {
         params: { ...params, state: params.state }, browserProof, expires: Date.now() + flowLifetimeMs,
       });
-      res.cookie(cookieName, browserProof, { ...cookieOptions, maxAge: flowLifetimeMs });
+      // A retry or a second tab must not replace another pending flow's proof.
+      res.cookie(cookiePrefix + flow, browserProof, { ...cookieOptions, maxAge: flowLifetimeMs });
       res.set({
         'Content-Security-Policy': "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
         'Referrer-Policy': 'no-referrer',
@@ -196,12 +197,21 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
   router.post(loginPath, async (req, res) => {
     const flowKey = typeof req.body?.flow === 'string' ? req.body.flow : '';
     const flow = flows.get(flowKey);
+    const cookieName = cookiePrefix + flowKey;
     const browserProof = (req.header('cookie') ?? '').split(';').map(part => part.trim())
       .find(part => part.startsWith(cookieName + '='))?.slice(cookieName.length + 1) ?? '';
     res.setHeader('Cache-Control', 'no-store');
 
     if (!flow || flow.expires <= Date.now() || !equalSecret(browserProof, flow.browserProof)) {
-      res.status(400).send('Sign-in expired. Return to Claude and reconnect.');
+      const reason = !flow ? 'unknown_flow' : flow.expires <= Date.now() ? 'expired_flow'
+        : !browserProof ? 'missing_browser_cookie' : 'browser_cookie_mismatch';
+      console.warn(JSON.stringify({ event: 'claude_signin_rejected', reason }));
+      const message = reason === 'missing_browser_cookie'
+        ? 'This browser did not return the sign-in cookie. Reconnect from Claude in a browser that allows cookies.'
+        : reason === 'browser_cookie_mismatch'
+          ? 'The browser sign-in session changed. Return to Claude and reconnect.'
+          : 'Sign-in expired. Return to Claude and reconnect.';
+      res.status(400).send(message);
       return;
     }
     flows.delete(flowKey);
