@@ -237,3 +237,37 @@ test('MCP discovery advertises the expanded tools with read/write annotations', 
     assert.equal(tools.find(t => t.name === 'apply_shopify_admin_mutation')!.annotations!.destructiveHint, true);
   } finally { await client.close(); await server.close(); }
 });
+
+test('Claude Shopify management requires an explicit matching-store write grant and exact preview approval', async t => {
+  const count = mock(t);
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const { createClaudeMcpServer } = await import('./claude-tools.js');
+  const { grantSchema } = await import('./claude-members.js');
+  async function connect(grants: unknown) {
+    const server = createClaudeMcpServer(grantSchema.parse(grants));
+    const client = new Client({ name: 'claude-access-test', version: '1' });
+    const [left, right] = InMemoryTransport.createLinkedPair();
+    await server.connect(left); await client.connect(right);
+    t.after(async () => { await client.close(); await server.close(); });
+    return client;
+  }
+  const reporting = await connect({ shopify: 'mambo-test' });
+  const wrongShop = await connect({ shopify: 'another-shop', writes: { shopify: true } });
+  for (const client of [reporting, wrongShop]) {
+    assert.ok(!(await client.listTools()).tools.some(tool => tool.name === 'apply_shopify_admin_mutation'));
+    assert.equal((await client.callTool({ name: 'apply_shopify_admin_mutation', arguments: {} })).isError, true);
+  }
+  const writer = await connect({ shopify: 'mambo-test', writes: { shopify: true } });
+  const previewResponse = await writer.callTool({ name: 'preview_shopify_admin_mutation', arguments: { plan: plan(42) } });
+  assert.notEqual(previewResponse.isError, true);
+  const p = JSON.parse((previewResponse.content as [{ text: string }])[0].text);
+  assert.equal(count.mutations, 0);
+  const arguments_ = approved(p);
+  assert.equal((await writer.callTool({ name: 'apply_shopify_admin_mutation', arguments: {
+    ...arguments_, confirmationCode: 'SHOPIFY-00000000',
+  } })).isError, true);
+  assert.equal(count.mutations, 0);
+  assert.notEqual((await writer.callTool({ name: 'apply_shopify_admin_mutation', arguments: arguments_ })).isError, true);
+  assert.equal(count.mutations, 1);
+});

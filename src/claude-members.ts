@@ -21,7 +21,19 @@ export const grantSchema = z.object({
   searchConsole: googleResources(z.string().min(1).max(2048)).default([]),
   merchantCenter: googleResources(z.string().regex(/^\d+$/)).default([]),
   shopify: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).optional(),
-}).strict();
+  writes: z.object({
+    shopify: z.boolean().default(false),
+    googleAdsCustomerIds: z.array(z.string().regex(/^\d{10}$/)).max(100).default([]),
+  }).strict().optional(),
+}).strict().superRefine((grants, ctx) => {
+  if (grants.writes?.shopify && !grants.shopify) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Shopify writes require a Shopify reporting grant.' });
+  }
+  const ids = grants.writes?.googleAdsCustomerIds ?? [];
+  if (new Set(ids).size !== ids.length || ids.some(id => !grants.googleAds.some(resource => resource.id === id))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Google Ads write IDs must be unique and have reporting grants.' });
+  }
+});
 
 export type MemberGrants = z.infer<typeof grantSchema>;
 

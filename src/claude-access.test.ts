@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import express from 'express';
 
-test('Claude sign-in, account isolation and revocation preserve the legacy ChatGPT path', { timeout: 15_000 }, async t => {
+test('Claude sign-in, scoped writes and revocation preserve the legacy ChatGPT path', { timeout: 30_000 }, async t => {
   const data = await mkdtemp(join(tmpdir(), 'marketing-hub-access-'));
   t.after(() => rm(data, { recursive: true, force: true }));
   const app = express();
@@ -50,7 +50,7 @@ test('Claude sign-in, account isolation and revocation preserve the legacy ChatG
   });
 
   const { createClaudeRouter } = await import('./claude-oauth.js');
-  const { provisionMember, revokeMember } = await import('./claude-members.js');
+  const { provisionMember, revokeMember, readMember, grantSchema } = await import('./claude-members.js');
   const { writeStore } = await import('./token-store.js');
   const { handleMcpRequest } = await import('./mcp-http.js');
   const { createMarketingMcpServer } = await import('./mcp.js');
@@ -70,6 +70,13 @@ test('Claude sign-in, account isolation and revocation preserve the legacy ChatG
   }] });
   const member = await provisionMember('Member@example.com', memberGrants);
   const other = await provisionMember('other@example.com', { shopify: 'test-shop' });
+  assert.equal(grantSchema.safeParse({ writes: { shopify: true } }).success, false);
+  assert.equal(grantSchema.safeParse({ googleAds: [{ id: '1234567890', connectionId }],
+    writes: { googleAdsCustomerIds: ['9999999999'] } }).success, false);
+  const writer = await provisionMember('writer@example.com', {
+    shopify: 'test-shop', googleAds: [{ id: '1234567890', connectionId }, { id: '2222222222', connectionId }],
+    writes: { shopify: true, googleAdsCustomerIds: ['1234567890'] },
+  });
 
   const anonymous = await fetch(resource);
   assert.equal(anonymous.status, 401);
@@ -141,6 +148,7 @@ test('Claude sign-in, account isolation and revocation preserve the legacy ChatG
   const accountContent = accounts.content as [{ text: string }];
   assert.deepEqual(JSON.parse(accountContent[0].text), {
     ga4PropertyIds: ['111'], googleAdsCustomerIds: [], searchConsoleSites: [], merchantCenterAccountIds: [], shopifyShop: null,
+    writeAccess: { shopify: false, googleAdsCustomerIds: [] },
   });
 
   const originalFetch = globalThis.fetch;
@@ -190,6 +198,100 @@ test('Claude sign-in, account isolation and revocation preserve the legacy ChatG
   assert.deepEqual((await otherClient.listTools()).tools.map(tool => tool.name), [
     'list_authorized_accounts', 'get_shopify_sales_overview',
   ]);
+
+  async function signIn(credentials: { email: string; password: string }, scope: string) {
+    const url = new URL(authorizationUrl);
+    url.searchParams.set('scope', scope);
+    const response = await fetch(url);
+    const cookie = response.headers.get('set-cookie')?.split(';')[0];
+    const flow = /name="flow" value="([^"]+)"/.exec(await response.text())?.[1];
+    assert.ok(cookie && flow);
+    const login = await fetch(baseUrl + '/claude/oauth/login', {
+      method: 'POST', body: new URLSearchParams({ flow, ...credentials }), headers: { cookie }, redirect: 'manual',
+    });
+    assert.equal(login.status, 303);
+    const code = new URL(login.headers.get('location')!).searchParams.get('code')!;
+    const token = await tokenRequest({ ...exchange, code });
+    assert.equal(token.status, 200);
+    return token.json();
+  }
+  const readTokens = await signIn(writer, 'mcp:read offline_access');
+  const readClient = await connect(resource, readTokens.access_token);
+  assert.ok(!(await readClient.listTools()).tools.some(tool => tool.name.startsWith('apply_')));
+  const expandedRefresh = await tokenRequest({ grant_type: 'refresh_token', refresh_token: readTokens.refresh_token,
+    resource, scope: 'mcp:read mcp:write offline_access' });
+  assert.equal(expandedRefresh.status, 400);
+
+  // Sessions issued by v0.15/v0.16 have no scope claim and must stay read-only.
+  const signingKey = createHmac('sha256', Buffer.from('0'.repeat(64), 'hex'))
+    .update(JSON.stringify(['claude-session-v1', baseUrl + '/claude', clientId])).digest();
+  const oldPayload = Buffer.from(JSON.stringify({ email: writer.email, version: (await readMember(writer.email))!.sessionVersion,
+    kind: 'access', expires: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url');
+  const oldToken = 'hub1.' + oldPayload + '.' + createHmac('sha256', signingKey).update(oldPayload).digest('base64url');
+  const oldClient = await connect(resource, oldToken);
+  assert.ok(!(await oldClient.listTools()).tools.some(tool => tool.name.startsWith('apply_')));
+
+  const deniedTokens = await signIn(other, 'mcp:read mcp:write offline_access');
+  assert.equal(deniedTokens.scope, 'mcp:read offline_access');
+  const deniedClient = await connect(resource, deniedTokens.access_token);
+  assert.ok(!(await deniedClient.listTools()).tools.some(tool => tool.name.startsWith('apply_')));
+
+  const writeTokens = await signIn(writer, 'mcp:read mcp:write offline_access');
+  assert.equal(writeTokens.scope, 'mcp:read mcp:write offline_access');
+  const writeClient = await connect(resource, writeTokens.access_token);
+  const writeTools = (await writeClient.listTools()).tools;
+  assert.ok(writeTools.some(tool => tool.name === 'apply_shopify_admin_mutation'));
+  assert.ok(writeTools.some(tool => tool.name === 'preview_shopify_launch_preparation'));
+  assert.ok(writeTools.some(tool => tool.name === 'apply_google_ads_conversion_primary_update'));
+  assert.ok(!writeTools.some(tool => tool.name === 'list_google_connections'));
+  const listed = await writeClient.callTool({ name: 'list_authorized_accounts', arguments: {} });
+  assert.deepEqual(JSON.parse((listed.content as [{ text: string }])[0].text).writeAccess,
+    { shopify: true, googleAdsCustomerIds: ['1234567890'] });
+
+  let adsPrimary = true;
+  let writes = 0;
+  let upstreamCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).startsWith(baseUrl + '/')) return originalFetch(input, init);
+    upstreamCalls++;
+    const url = String(input);
+    assert.match(url, /^https:\/\/googleads.googleapis.com\/v\d+\/customers\/1234567890\//);
+    assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer test-access-token');
+    if (url.endsWith('/googleAds:searchStream')) return Response.json([{ results: [{ conversionAction: {
+      resourceName: 'customers/1234567890/conversionActions/987', id: '987', name: 'Purchase', status: 'ENABLED',
+      type: 'GOOGLE_ANALYTICS_4_PURCHASE', category: 'PURCHASE', primaryForGoal: adsPrimary,
+    } }] }]);
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.operations[0].updateMask, 'primaryForGoal');
+    if (!body.validateOnly) { writes++; adsPrimary = false; }
+    return Response.json({ results: [{ resourceName: 'customers/1234567890/conversionActions/987' }] });
+  };
+  try {
+    const args = { customerId: '2222222222', conversionActionId: '987', primaryForGoal: false };
+    const previewName = 'preview_google_ads_conversion_primary_update';
+    assert.equal((await writeClient.callTool({ name: previewName, arguments: args })).isError, true);
+    assert.equal(upstreamCalls, 0); // Reporting permission alone never authorizes a write.
+    const allowed = { ...args, customerId: '123-456-7890', connectionId: 'spoofed' };
+    const previewResult = await writeClient.callTool({ name: previewName, arguments: allowed });
+    assert.notEqual(previewResult.isError, true);
+    const preview = JSON.parse((previewResult.content as [{ text: string }])[0].text);
+    assert.equal(writes, 0);
+    const approval = { ...allowed, confirmationCode: preview.safety.confirmationCode, confirmationToken: preview.confirmationToken };
+    const applyName = 'apply_google_ads_conversion_primary_update';
+    assert.equal((await writeClient.callTool({ name: applyName, arguments: { ...approval, confirmationCode: 'GOOGLE-ADS-00000000' } })).isError, true);
+    assert.equal(writes, 0);
+    const callsBeforeDenial = upstreamCalls;
+    assert.equal((await writeClient.callTool({ name: applyName, arguments: { ...approval, customerId: '2222222222' } })).isError, true);
+    assert.equal(upstreamCalls, callsBeforeDenial);
+    assert.notEqual((await writeClient.callTool({ name: applyName, arguments: approval })).isError, true);
+    assert.equal(writes, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  // Replacing grants immediately invalidates write tokens and their refresh token.
+  await provisionMember(writer.email, { shopify: 'test-shop' });
+  assert.equal((await fetch(resource, { headers: { authorization: 'Bearer ' + writeTokens.access_token } })).status, 401);
+  assert.equal((await tokenRequest({ grant_type: 'refresh_token', refresh_token: writeTokens.refresh_token, resource })).status, 400);
   await revokeMember(other.email);
   assert.equal((await fetch(resource, { headers: { authorization: 'Bearer ' + otherTokens.access_token } })).status, 401);
 
