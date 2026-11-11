@@ -110,3 +110,10 @@ reporting tools. Existing signed sessions issued before write scopes existed
 remain reporting-only. Replacing a member with `set` still rotates its password
 and invalidates its prior access and refresh tokens. The existing ChatGPT
 `/mcp` authentication and capabilities are unchanged.
+
+Each pending sign-in has its own secure, HttpOnly, SameSite=Lax cookie. A
+second connection attempt or browser tab does not invalidate another pending
+page. Each flow remains limited to ten minutes and one successful submission;
+its cookie is cleared independently. A missing or mismatched browser cookie
+gets a distinct message rather than being labelled as an expired link.
+Rejection logs contain only a reason code, never credentials or flow values.

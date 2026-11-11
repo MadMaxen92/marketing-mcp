@@ -130,6 +130,36 @@ test('Claude sign-in, scoped writes and revocation preserve the legacy ChatGPT p
   assert.equal(exchangeResponse.status, 200);
   const tokens = await exchangeResponse.json();
   assert.equal((await tokenRequest(exchange)).status, 400);
+
+  // A real browser keeps both cookies when a reconnect opens a second page.
+  // Previously both responses used one cookie name and the first page failed.
+  const parallelPages = await Promise.all([fetch(authorizationUrl), fetch(authorizationUrl)]);
+  const parallel = await Promise.all(parallelPages.map(async response => {
+    const cookie = response.headers.get('set-cookie')!.split(';')[0]!;
+    const name = cookie.split('=')[0]!;
+    const flow = /name="flow" value="([^"]+)"/.exec(await response.text())![1]!;
+    return { cookie, name, flow };
+  }));
+  assert.notEqual(parallel[0]!.name, parallel[1]!.name);
+  const submitParallel = (index: number, cookie: string) => fetch(baseUrl + '/claude/oauth/login', {
+    method: 'POST', redirect: 'manual', headers: { cookie },
+    body: new URLSearchParams({ flow: parallel[index]!.flow, email: member.email, password: member.password }),
+  });
+  const missingProof = await submitParallel(0, parallel[1]!.cookie);
+  assert.equal(missingProof.status, 400);
+  assert.match(await missingProof.text(), /did not return the sign-in cookie/);
+  const wrongProof = await submitParallel(0, parallel[0]!.name + '=' + 'x'.repeat(43));
+  assert.equal(wrongProof.status, 400);
+  assert.match(await wrongProof.text(), /browser sign-in session changed/);
+  const bothCookies = parallel.map(page => page.cookie).join('; ');
+  for (let index = 0; index < parallel.length; index++) {
+    const response = await submitParallel(index, index === 0 ? bothCookies : parallel[1]!.cookie);
+    assert.equal(response.status, 303);
+    assert.ok(response.headers.get('set-cookie')!.startsWith(parallel[index]!.name + '='));
+    const code = new URL(response.headers.get('location')!).searchParams.get('code')!;
+    assert.equal((await tokenRequest({ ...exchange, code })).status, 200);
+    assert.equal((await submitParallel(index, bothCookies)).status, 400);
+  }
   assert.equal((await fetch(baseUrl + '/mcp', { headers: { authorization: 'Bearer ' + tokens.access_token } })).status, 401);
   assert.equal((await fetch(resource, { headers: { authorization: 'Bearer ' + tokens.refresh_token } })).status, 401);
 
