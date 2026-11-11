@@ -18,7 +18,8 @@ const authorizePath = '/claude/oauth/authorize';
 const tokenPath = '/claude/oauth/token';
 const resourceMetadataPath = '/.well-known/oauth-protected-resource' + resourcePath;
 const scope = 'mcp:read';
-const scopes = [scope, 'offline_access'];
+const writeScope = 'mcp:write';
+const scopes = [scope, writeScope, 'offline_access'];
 const flowLifetimeMs = 10 * 60_000;
 const accessLifetimeSeconds = 3600;
 const refreshLifetimeSeconds = 30 * 24 * 3600;
@@ -32,6 +33,7 @@ const sessionSchema = z.object({
   version: z.string().uuid(),
   kind: z.enum(['access', 'refresh']),
   expires: z.number().int(),
+  scopes: z.array(z.enum(['mcp:read', 'mcp:write', 'offline_access'])).optional(),
 });
 
 type Session = z.infer<typeof sessionSchema>;
@@ -59,14 +61,15 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
     .update(JSON.stringify(['claude-session-v1', issuer, clientId])).digest();
   const sign = (value: string) => createHmac('sha256', signingKey).update(value).digest('base64url');
 
-  function sessionToken(member: ClaudeMember, kind: Session['kind'], lifetime: number): string {
+  function sessionToken(member: ClaudeMember, kind: Session['kind'], lifetime: number, grantedScopes: string[]): string {
     const payload = Buffer.from(JSON.stringify({
       email: member.email, version: member.sessionVersion, kind, expires: now() + lifetime,
+      scopes: grantedScopes as NonNullable<Session['scopes']>,
     } satisfies Session)).toString('base64url');
     return 'hub1.' + payload + '.' + sign(payload);
   }
 
-  async function memberForToken(token: string, kind: Session['kind']): Promise<{ member: ClaudeMember; expiresAt: number } | undefined> {
+  async function memberForToken(token: string, kind: Session['kind']): Promise<{ member: ClaudeMember; expiresAt: number; scopes: string[] } | undefined> {
     const parts = /^hub1\.([A-Za-z0-9_-]{1,900})\.([A-Za-z0-9_-]{43})$/.exec(token);
     const payload = parts?.[1];
     const signature = parts?.[2];
@@ -74,16 +77,20 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
     const session = sessionSchema.parse(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')));
     if (session.kind !== kind || session.expires <= now()) return;
     const member = await readMember(session.email);
-    if (member?.sessionVersion === session.version) return { member, expiresAt: session.expires };
+    if (member?.sessionVersion === session.version) {
+      return { member, expiresAt: session.expires, scopes: session.scopes ?? [scope, 'offline_access'] };
+    }
   }
 
-  function tokensFor(member: ClaudeMember, refreshToken?: string) {
+  function tokensFor(member: ClaudeMember, requestedScopes: string[], refreshToken?: string) {
+    const canWrite = member.grants.writes?.shopify || (member.grants.writes?.googleAdsCustomerIds.length ?? 0) > 0;
+    const grantedScopes = requestedScopes.filter(value => value !== writeScope || canWrite);
     return {
-      access_token: sessionToken(member, 'access', accessLifetimeSeconds),
+      access_token: sessionToken(member, 'access', accessLifetimeSeconds, grantedScopes),
       token_type: 'Bearer',
       expires_in: accessLifetimeSeconds,
-      refresh_token: refreshToken ?? sessionToken(member, 'refresh', refreshLifetimeSeconds),
-      scope: scopes.join(' '),
+      refresh_token: refreshToken ?? sessionToken(member, 'refresh', refreshLifetimeSeconds, grantedScopes),
+      scope: grantedScopes.join(' '),
     };
   }
 
@@ -92,7 +99,9 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
   }
 
   function checkScopes(requested?: string[]) {
-    if (requested?.some(value => !scopes.includes(value))) throw new InvalidScopeError('Invalid scope.');
+    if (requested && (!requested.includes(scope) || requested.some(value => !scopes.includes(value)))) {
+      throw new InvalidScopeError('Invalid scope.');
+    }
   }
 
   function pendingCode(key: string): PendingCode {
@@ -148,28 +157,30 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
       codes.delete(code);
       const member = await readMember(pending.email);
       if (!member || member.sessionVersion !== pending.version) throw new InvalidGrantError('Access has been revoked.');
-      return tokensFor(member);
+      return tokensFor(member, pending.params.scopes ?? [scope]);
     },
     async exchangeRefreshToken(_client, refreshToken, requested, tokenResource) {
       checkResource(tokenResource);
       checkScopes(requested);
       const session = await memberForToken(refreshToken, 'refresh');
       if (!session) throw new InvalidGrantError('Invalid or expired refresh token.');
-      return tokensFor(session.member, refreshToken);
+      if (requested?.some(value => !session.scopes.includes(value))) throw new InvalidScopeError('Cannot expand a refresh token scope.');
+      return tokensFor(session.member, requested ?? session.scopes, refreshToken);
     },
     async verifyAccessToken(token) {
       const session = await memberForToken(token, 'access');
       if (!session) throw new InvalidTokenError('Invalid or expired access token.');
       return {
-        token, clientId, scopes: [scope], resource: new URL(resource), expiresAt: session.expiresAt,
-        extra: { grants: session.member.grants },
+        token, clientId, scopes: session.scopes, resource: new URL(resource), expiresAt: session.expiresAt,
+        extra: { grants: session.scopes.includes(writeScope)
+          ? session.member.grants : { ...session.member.grants, writes: undefined } },
       };
     },
   };
 
   const resourceMetadata = new URL(resourceMetadataPath, issuer).href;
   router.get(resourceMetadataPath, (_req, res) => {
-    res.json({ resource, authorization_servers: [issuer], scopes_supported: [scope], bearer_methods_supported: ['header'] });
+    res.json({ resource, authorization_servers: [issuer], scopes_supported: [scope, writeScope], bearer_methods_supported: ['header'] });
   });
   router.get(['/.well-known/oauth-authorization-server/claude', '/claude/.well-known/oauth-authorization-server'], (_req, res) => {
     res.json({

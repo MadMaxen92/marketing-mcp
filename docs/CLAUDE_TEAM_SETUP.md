@@ -6,9 +6,11 @@ Google Ads customers, Search Console sites, Merchant Center accounts, or the
 configured Shopify shop for aggregate sales reporting.
 
 Claude's account list shows only those grants. The server resolves each approved
-ID to its assigned Google connection before calling the provider. It exposes
-structured reporting tools only. Keep write workflows, raw queries, detailed
-Shopify order tools and paid DataForSEO calls on the existing admin connection.
+ID to its assigned Google connection before calling the provider. Reporting-only
+logins expose structured reporting tools. Explicit optional write
+grants enable the existing guarded Shopify management tools and the Google Ads
+purchase conversion Primary/Secondary workflow. Raw Google queries, detailed
+Shopify order tools, Keepa and paid DataForSEO tools remain on the admin connection.
 
 ## 1. Enable the Claude endpoint
 
@@ -44,9 +46,22 @@ only the resources that person is authorized to use.
   "googleAds": [{ "id": "1234567890", "connectionId": "123456789012345678901" }],
   "searchConsole": [{ "id": "sc-domain:example.com", "connectionId": "123456789012345678901" }],
   "merchantCenter": [{ "id": "1234567", "connectionId": "123456789012345678901" }],
-  "shopify": "example-shop"
+  "shopify": "example-shop",
+  "writes": {
+    "shopify": true,
+    "googleAdsCustomerIds": ["1234567890"]
+  }
 }
 ```
+
+Omit `writes` for a reporting-only login. Shopify write access requires the
+matching `shopify` reporting grant. Each Google Ads write ID must also be in
+`googleAds`; read access to another customer never permits writes to it.
+The caller cannot select a different backing Google connection. Google Ads
+writes currently change only an enabled Purchase conversion's Primary/Secondary
+setting, not campaigns, budgets or ads. Shopify writes cover the management
+areas supported by the installed app scopes and the shared admin workflow.
+Every write still requires a concrete preview and its exact confirmation code.
 
 From the production checkout:
 
@@ -80,3 +95,18 @@ Ask Claude to run `list_authorized_accounts`, then request a small report on an
 approved account and confirm an ungranted account is denied. The connector uses
 the existing Hub infrastructure and upstream integrations. It requires no new
 identity, email, or hosting service.
+
+## OAuth write consent and compatibility
+
+The resource advertises `mcp:read` and `mcp:write`. Claude must request both for
+a write-enabled login. `mcp:write` never grants account permissions by itself:
+the server intersects it with the member's exact write grants on every request.
+A read-only login cannot gain writes by requesting a broader scope. A refresh
+token cannot request a scope absent from the original authorization.
+
+Reconnect from Claude after enabling writes so it discovers and requests the
+new scope. An old browser sign-in or read-only token continues to expose only
+reporting tools. Existing signed sessions issued before write scopes existed
+remain reporting-only. Replacing a member with `set` still rotates its password
+and invalidates its prior access and refresh tokens. The existing ChatGPT
+`/mcp` authentication and capabilities are unchanged.

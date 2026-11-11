@@ -12,6 +12,8 @@ import {
 } from './search-console.js';
 import { getShopifySalesOverview } from './shopify.js';
 import { MARKETING_MCP_VERSION } from './version.js';
+import { registerShopifyManagementTools } from './shopify-management-tools.js';
+import { registerGoogleAdsWriteTools } from './google-ads-write-tools.js';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const dates = { startDate: date, endDate: date };
@@ -42,6 +44,10 @@ export function createClaudeMcpServer(grants: MemberGrants): McpServer {
     searchConsoleSites: grants.searchConsole.map(resource => resource.id),
     merchantCenterAccountIds: grants.merchantCenter.map(resource => resource.id),
     shopifyShop: hasShopify ? grants.shopify : null,
+    writeAccess: {
+      shopify: hasShopify && grants.writes?.shopify === true,
+      googleAdsCustomerIds: grants.writes?.googleAdsCustomerIds ?? [],
+    },
   }));
 
   if (grants.ga4.length > 0) {
@@ -124,6 +130,12 @@ export function createClaudeMcpServer(grants: MemberGrants): McpServer {
       inputSchema: { ...dates, maxOrders: z.number().int().min(1).max(5000).default(1000) },
       annotations: reporting,
     }, async input => result(await getShopifySalesOverview(input)));
+  }
+
+  if (hasShopify && grants.writes?.shopify) registerShopifyManagementTools(server);
+  const writableAds = grants.googleAds.filter(resource => grants.writes?.googleAdsCustomerIds.includes(resource.id));
+  if (writableAds.length > 0) {
+    registerGoogleAdsWriteTools(server, id => connectionFor(writableAds, id));
   }
 
   return server;
