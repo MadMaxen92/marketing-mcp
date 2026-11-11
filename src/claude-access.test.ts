@@ -81,9 +81,11 @@ test('Claude sign-in, scoped writes and revocation preserve the legacy ChatGPT p
   const anonymous = await fetch(resource);
   assert.equal(anonymous.status, 401);
   assert.match(anonymous.headers.get('www-authenticate') ?? '', /oauth-protected-resource\/claude\/mcp/);
+  assert.doesNotMatch(anonymous.headers.get('www-authenticate') ?? '', /\bscope=/);
   const protectedMetadata = await (await fetch(baseUrl + '/.well-known/oauth-protected-resource/claude/mcp')).json();
   assert.equal(protectedMetadata.resource, resource);
   assert.deepEqual(protectedMetadata.authorization_servers, [baseUrl + '/claude']);
+  assert.deepEqual(protectedMetadata.scopes_supported, ['mcp:read', 'mcp:write']);
   const metadata = await (await fetch(baseUrl + '/.well-known/oauth-authorization-server/claude')).json();
   const legacyMetadata = await (await fetch(baseUrl + '/.well-known/oauth-authorization-server')).json();
   assert.equal(metadata.authorization_endpoint, baseUrl + '/claude/oauth/authorize');
@@ -266,6 +268,11 @@ test('Claude sign-in, scoped writes and revocation preserve the legacy ChatGPT p
   const oldToken = 'hub1.' + oldPayload + '.' + createHmac('sha256', signingKey).update(oldPayload).digest('base64url');
   const oldClient = await connect(resource, oldToken);
   assert.ok(!(await oldClient.listTools()).tools.some(tool => tool.name.startsWith('apply_')));
+  const writeOnlyPayload = Buffer.from(JSON.stringify({ email: writer.email,
+    version: (await readMember(writer.email))!.sessionVersion, kind: 'access',
+    expires: Math.floor(Date.now() / 1000) + 3600, scopes: ['mcp:write'] })).toString('base64url');
+  const writeOnlyToken = 'hub1.' + writeOnlyPayload + '.' + createHmac('sha256', signingKey).update(writeOnlyPayload).digest('base64url');
+  assert.equal((await fetch(resource, { headers: { authorization: 'Bearer ' + writeOnlyToken } })).status, 401);
 
   const deniedTokens = await signIn(other, 'mcp:read mcp:write offline_access');
   assert.equal(deniedTokens.scope, 'mcp:read offline_access');

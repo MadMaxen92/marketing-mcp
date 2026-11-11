@@ -172,7 +172,7 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
     },
     async verifyAccessToken(token) {
       const session = await memberForToken(token, 'access');
-      if (!session) throw new InvalidTokenError('Invalid or expired access token.');
+      if (!session || !session.scopes.includes(scope)) throw new InvalidTokenError('Invalid or expired access token.');
       return {
         token, clientId, scopes: session.scopes, resource: new URL(resource), expiresAt: session.expiresAt,
         extra: { grants: session.scopes.includes(writeScope)
@@ -237,7 +237,9 @@ export function createClaudeRouter(clientId: string, clientSecret: string): Rout
   });
 
   router.all(resourcePath, requireBearerAuth({
-    verifier: provider, requiredScopes: [scope], resourceMetadataUrl: resourceMetadata,
+    // The verifier enforces mcp:read. Omitting requiredScopes here avoids the
+    // SDK's read-only 401 hint overriding the resource metadata's scope list.
+    verifier: provider, resourceMetadataUrl: resourceMetadata,
   }), (req, res, next) => {
     const grants = req.auth?.extra?.grants as MemberGrants | undefined;
     if (!grants) return next(new Error('Missing authenticated account grants.'));
