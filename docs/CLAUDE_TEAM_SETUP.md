@@ -124,3 +124,10 @@ so restricting it to self blocks completion after the password was accepted.
 The password form action remains the Hub's own login endpoint; the callback
 receives only the one-time code and original state through the 303 redirect.
 The OAuth client still rejects every other redirect URI.
+
+Initial 401 challenges point to the protected resource metadata without an
+explicit scope override. MCP clients can therefore discover both read and write
+scopes instead of being pinned to reporting-only access by the SDK middleware.
+The token verifier still requires mcp:read, and per-member grants still downscope
+reporting-only logins. Existing reporting-only connections need one reconnect
+to request the complete scope set.
