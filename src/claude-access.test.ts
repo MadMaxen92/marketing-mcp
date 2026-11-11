@@ -99,9 +99,15 @@ test('Claude sign-in, scoped writes and revocation preserve the legacy ChatGPT p
   }).toString();
   const authorize = await fetch(authorizationUrl);
   assert.equal(authorize.status, 200);
+  assert.equal(authorize.headers.get('content-security-policy'),
+    "default-src 'none'; form-action 'self' https://claude.ai/api/mcp/auth_callback; base-uri 'none'; frame-ancestors 'none'");
+  const unsafeRedirect = new URL(authorizationUrl);
+  unsafeRedirect.searchParams.set('redirect_uri', 'https://example.com/callback');
+  assert.equal((await fetch(unsafeRedirect)).status, 400);
   const cookie = authorize.headers.get('set-cookie')?.split(';')[0];
   assert.ok(cookie);
   const form = await authorize.text();
+  assert.match(form, /<form method="post" action="\/claude\/oauth\/login">/);
   const flow = /name="flow" value="([^"]+)"/.exec(form)?.[1];
   assert.ok(flow);
 
